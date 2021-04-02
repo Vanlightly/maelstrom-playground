@@ -1,0 +1,44 @@
+package com.vanlightly.bookkeeper;
+
+public class Fields {
+    public final static String SOURCE = "src";
+    public final static String DEST = "dest";
+    public final static String IN_REPLY_TO = "in_reply_to";
+    public final static String MSG_ID = "msg_id";
+    public final static String BODY = "body";
+    public final static String MSG_TYPE = "type";
+    public final static String SESSION_ID = "session_id";
+    public final static String RC = "rc";
+    public final static String VERSION = "version";
+
+    public class L {
+        public final static String LEDGER_ID = "ledger_id";
+        public final static String ENTRY_ID = "entry_id";
+        public final static String VALUE = "op";
+        public final static String LAC = "lac";
+        public final static String RECOVERY = "recovery";
+        public final static String FENCE = "fence";
+    }
+
+    public class M {
+        public final static String LEDGER_METADATA = "ledger_metadata";
+    }
+
+    public class KV {
+        public final static String KV_MD_VERSION = "kv-md-version";
+        public final static String LEDGER_LIST_VERSION = "ledger_list_version";
+        public final static String LEDGER_LIST = "ledger_list";
+        public final static String LEADER = "leader";
+        public final static String LEADER_VERSION = "leader_epoch";
+        public final static String CURSOR_VERSION = "cursor-version";
+        public final static String CURSOR_LEDGER_ID = "cursor-ledger-id";
+        public final static String CURSOR_ENTRY_ID = "cursor-entry-id";
+
+        public final static String KEY = "key";
+        public final static String VALUE = "value";
+        public final static String FROM = "from";
+        public final static String TO = "to";
+
+    }
+
+}
