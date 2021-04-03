@@ -22,9 +22,9 @@ public class LedgerHandle {
     Queue<PendingAddOp> pendingAddOps;
     Map<Integer, String> delayedWriteFailedBookies;
     long pendingAddsSequenceHead;
-    long currentEntryId;
-    boolean changingEnsemble;
+    long lastAddPushed;
     long lastAddConfirmed;
+    boolean changingEnsemble;
     LedgerManager ledgerManager;
 
     boolean pendingClose;
@@ -45,7 +45,7 @@ public class LedgerHandle {
         this.pendingAddOps = new ArrayDeque<>();
         this.pendingAddsSequenceHead = -1L;
         this.lastAddConfirmed = -1L;
-        this.currentEntryId = -1L;
+        this.lastAddPushed = -1L;
         this.delayedWriteFailedBookies = new HashMap<>();
         this.closeFutures = new ArrayList<>();
     }
@@ -66,11 +66,23 @@ public class LedgerHandle {
         return lastAddConfirmed;
     }
 
+    public long getLastAddPushed() {
+        return lastAddPushed;
+    }
+
+    public void setLastAddPushed(long lastAddPushed) {
+        this.lastAddPushed = lastAddPushed;
+    }
+
+    public void setLastAddConfirmed(long lastAddConfirmed) {
+        this.lastAddConfirmed = lastAddConfirmed;
+    }
+
     public CompletableFuture<Entry> addEntry(String value) {
         CompletableFuture<Entry> future = new CompletableFuture<>();
 
-        currentEntryId++;
-        Entry entry = new Entry(versionedMetadata.getValue().getLedgerId(), currentEntryId, value);
+        lastAddPushed++;
+        Entry entry = new Entry(versionedMetadata.getValue().getLedgerId(), lastAddPushed, value);
         PendingAddOp addOp = new PendingAddOp(mapper,
                 messageSender,
                 entry,
@@ -147,12 +159,12 @@ public class LedgerHandle {
             return CompletableFuture.completedFuture(lastAddConfirmed);
         }
 
-        return doQuorumRead(-1L)
+        return quorumRead(-1L)
                 .thenApply((List<Entry> entries) ->
                         entries.stream().map(x -> x.getEntryId()).max(Long::compare).get());
     }
 
-    private CompletableFuture<List<Entry>> doQuorumRead(long entryId) {
+    public CompletableFuture<List<Entry>> quorumRead(long entryId) {
         CompletableFuture<List<Entry>> readFuture = new CompletableFuture<>();
 
         ObjectNode readReq = mapper.createObjectNode();
@@ -204,10 +216,15 @@ public class LedgerHandle {
                     } catch (Exception ignored) {}
                 }
 
+                int required = (versionedMetadata.getValue().getWriteQuorum()
+                                - versionedMetadata.getValue().getAckQuorum()) + 1;
+
                 if (unknown >= versionedMetadata.getValue().getAckQuorum()) {
                     readFuture.completeExceptionally(new BkException("Not enough explicit responses", ReturnCodes.Bookie.NOT_ENOUGH_EXPLICIT_RESPONSES));
-                } else {
+                } else if (entries.size() >= required) {
                     readFuture.complete(entries);
+                } else {
+                    readFuture.completeExceptionally(new BkException("Not enough explicit responses", ReturnCodes.Ledger.LESS_THAN_ACK_QUORUM));
                 }
             });
 

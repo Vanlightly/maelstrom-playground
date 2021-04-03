@@ -80,6 +80,7 @@ public class KvStoreNode extends Node {
     public boolean roleSpecificAction() {
         return sessionManager.maintainSession()
                 || checkLeadership()
+                || closeCurrentLogSegment()
                 || startCatchUpReader()
                 || keepCatchingUp()
                 || startWriter()
@@ -166,9 +167,22 @@ public class KvStoreNode extends Node {
         cachedLeaderId = vLeaderId;
     }
 
-    private boolean closeCurrentSegment() {
+    private boolean closeCurrentLogSegment() {
         if (leaderIs(KvStoreState.LeaderState.NEED_CLOSE_SEGMENT)) {
-
+            state.leaderState = KvStoreState.LeaderState.CLOSING_SEGMENT;
+            LogSegmentCloser closer = newLogSegmentCloser();
+            closer.closeSegment(cursor)
+                    .whenComplete((Void v, Throwable t) -> {
+                        if (leaderIs(KvStoreState.LeaderState.CLOSING_SEGMENT)) {
+                            if (t != null) {
+                                logger.logError("Failed closing the current log segment. Will try again.", t);
+                                state.leaderState = KvStoreState.LeaderState.NEED_CLOSE_SEGMENT;
+                            } else {
+                                logger.logInfo("Log segment closed.");
+                                state.leaderState = KvStoreState.LeaderState.NEED_CATCHUP_READER;
+                            }
+                        }
+                    });
 
             return true;
         } else {
@@ -398,6 +412,14 @@ public class KvStoreNode extends Node {
                 this,
                 (position, op) -> advancedCommittedIndex(position, op),
                 true);
+    }
+
+    private LogSegmentCloser newLogSegmentCloser() {
+        return new LogSegmentCloser(metadataManager,
+                ledgerManager,
+                mapper,
+                logger,
+                this);
     }
 
     private void advancedCommittedIndex(Position newPosition,

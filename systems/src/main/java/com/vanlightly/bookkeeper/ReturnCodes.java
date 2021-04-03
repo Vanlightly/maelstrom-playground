@@ -14,6 +14,7 @@ public class ReturnCodes {
 
     public static class Ledger {
         public final static String LEDGER_CLOSED = "ledger-closed";
+        public final static String LESS_THAN_ACK_QUORUM = "less-than-quorum";
     }
 
     public static class Metadata {

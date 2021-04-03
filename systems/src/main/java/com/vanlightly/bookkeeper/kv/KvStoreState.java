@@ -15,6 +15,7 @@ public class KvStoreState {
 
     public enum LeaderState {
         NEED_CLOSE_SEGMENT,
+        CLOSING_SEGMENT,
         NEED_CATCHUP_READER,
         STARTING_CATCHUP_READER,
         CATCHUP_READING,
