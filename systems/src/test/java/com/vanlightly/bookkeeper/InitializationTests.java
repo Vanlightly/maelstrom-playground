@@ -14,22 +14,46 @@ public class InitializationTests {
         mapper = new ObjectMapper();
     }
 
+    @Test
+    public void testNoKvRequests() {
+        AtomicBoolean isCancelled = new AtomicBoolean();
+        NetworkRouter router = new NetworkRouter(isCancelled);
+        int nodeCount = 6;
+
+        for (int n = 1; n <= nodeCount; n++) {
+            String nodeId = "n" + n;
+            router.addNode(nodeId);
+            String init = "{\"dest\":\"" + nodeId +"\",\"body\":{\"type\":\"init\",\"node_id\":\"" + nodeId +"\",\"msg_id\":" + n + "},\"src\":\"c1\"}\n";
+            router.send(nodeId, init);
+        }
+
+        router.routeMessages();
+
+        try {
+            Thread.sleep(100000000);
+        } catch (Exception e) {
+
+        }
+    }
+
 //    @Test
-//    public void testBookieSession() {
+//    public void testOneKvWrite() {
 //        AtomicBoolean isCancelled = new AtomicBoolean();
 //        NetworkRouter router = new NetworkRouter(isCancelled);
-//        int nodeCount = 5;
+//        int nodeCount = 6;
 //
 //        for (int n = 1; n <= nodeCount; n++) {
-//            router.addNode("n" + n);
-//            String init = "{\"dest\":\"n" + n +"\",\"body\":{\"type\":\"init\",\"node_id\":\"n" + n +"\",\"msg_id\":" + n + "},\"src\":\"c1\"}\n";
-//            router.send("n" + n, init);
+//            String nodeId = "n" + n;
+//            router.addNode(nodeId);
+//            String init = "{\"dest\":\"" + nodeId +"\",\"body\":{\"type\":\"init\",\"node_id\":\"" + nodeId +"\",\"msg_id\":" + n + "},\"src\":\"c1\"}\n";
+//            router.send(nodeId, init);
 //        }
 //
 //        router.routeMessages();
 //
 //        try {
-//            Thread.sleep(100000000);
+//            String write = "{\"dest\":\"" + nodeId +"\",\"body\":{\"type\":\"init\",\"node_id\":\"" + nodeId +"\",\"msg_id\":" + n + "},\"src\":\"c1\"}\n";
+//
 //        } catch (Exception e) {
 //
 //        }

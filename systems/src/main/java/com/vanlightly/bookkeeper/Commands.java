@@ -22,6 +22,7 @@ public class Commands {
 
         // BK metadata
         public final static String BK_METADATA_READ = "read-bk-metadata";
+        public final static String GET_LEDGER_ID = "get-ledger-id";
         public final static String LEDGER_READ = "read-ledger";
         public final static String LEDGER_UPDATE = "update-ledger";
         public final static String LEDGER_CREATE = "create-ledger";

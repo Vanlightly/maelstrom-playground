@@ -32,6 +32,7 @@ public class BookieNode extends Node {
 
     @Override
     void handleRequest(JsonNode request) {
+        //logger.logDebug("Received request: " + request.toString());
         String type = request.get(Fields.BODY).get(Fields.MSG_TYPE).asText();
         if (sessionManager.handlesRequest(type)) {
             sessionManager.handleRequest(request);

@@ -59,7 +59,6 @@ public class NodeRunner {
         if (net.hasNext()) {
             String input = net.readNext();
             JsonNode msg = mapper.readTree(input);
-            node.getLogger().logDebug("input: " + input);
 
             if (msg.get(Fields.BODY).has(Fields.IN_REPLY_TO)) {
                 node.handleReply(msg);
@@ -88,6 +87,10 @@ public class NodeRunner {
                 } else {
                     throw new RuntimeException("Expect first message to be init. Instead received: " + type);
                 }
+            } else {
+                try {
+                    Thread.sleep(1000);
+                } catch(InterruptedException e) {}
             }
         }
     }

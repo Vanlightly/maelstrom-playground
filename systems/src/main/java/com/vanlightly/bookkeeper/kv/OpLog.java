@@ -1,8 +1,5 @@
 package com.vanlightly.bookkeeper.kv;
 
-import com.vanlightly.bookkeeper.Constants;
-import com.vanlightly.bookkeeper.Fields;
-
 import java.util.ArrayList;
 import java.util.List;
 
@@ -41,7 +38,7 @@ public class OpLog {
     }
 
     public boolean hasUnreplicated() {
-        return replicateIndex < log.size();
+        return replicateIndex > -1 && replicateIndex < log.size();
     }
 
     public Op getNextUnreplicatedOp() {
@@ -50,7 +47,7 @@ public class OpLog {
     }
 
     public boolean hasUnappliedOps() {
-        return commitIndex > appliedIndex;
+        return commitIndex > -1 && commitIndex > appliedIndex;
     }
 
     public Op getNextUnappliedOp() {

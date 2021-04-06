@@ -86,8 +86,11 @@ public class LogWriter extends LogClient {
                     new BkException("Not enough non-faulty bookies",
                             ReturnCodes.Bookie.NOT_ENOUGH_BOOKIES));
         } else {
-            LedgerMetadata lmd = new LedgerMetadata(-1L, writeQuorum, 2, availableBookies);
-            return ledgerManager.createLedgerMetadata(lmd);
+            return ledgerManager.getLedgerId()
+                    .thenCompose((Long ledgerId) -> {
+                        LedgerMetadata lmd = new LedgerMetadata(ledgerId, writeQuorum, 2, availableBookies);
+                        return ledgerManager.createLedgerMetadata(lmd);
+                    });
         }
     }
 
@@ -111,28 +114,4 @@ public class LogWriter extends LogClient {
 
         return future;
     }
-
-    private void checkForCancellation() {
-        if (isCancelled.get()) {
-            throw new OperationCancelledException();
-        }
-    }
-//
-//    private static class InitResult {
-//        int leaderEpoch;
-//        LedgerHandle lh;
-//
-//        public InitResult(int leaderEpoch, LedgerHandle lh) {
-//            this.leaderEpoch = leaderEpoch;
-//            this.lh = lh;
-//        }
-//
-//        public int getLeaderEpoch() {
-//            return leaderEpoch;
-//        }
-//
-//        public LedgerHandle getLh() {
-//            return lh;
-//        }
-//    }
 }

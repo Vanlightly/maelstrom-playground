@@ -43,13 +43,11 @@ public class LedgerManager {
 
         sessionManager.getSessionId()
                 .thenCompose((sessionId) -> {
-                    logger.logDebug("GetAvailableBookies request");
                     ObjectNode body = mapper.createObjectNode();
                     body.put(Fields.SESSION_ID, sessionId);
                     return messageSender.sendRequest(Node.MetadataNodeId, Commands.Metadata.BK_METADATA_READ, body);
                 })
                 .thenAccept((JsonNode msg) -> {
-                    logger.logDebug("GetAvailableBookies response: " + msg.toString());
                     JsonNode body = msg.get(Fields.BODY);
                     String rc = body.get(Fields.RC).asText();
 
@@ -119,6 +117,44 @@ public class LedgerManager {
         return future;
     }
 
+    public CompletableFuture<Long> getLedgerId() {
+        CompletableFuture<Long> future = new CompletableFuture<>();
+        FutureRetries.retryTransient(future, () -> doGetLedgerId());
+        return future;
+    }
+
+    public CompletableFuture<Long> doGetLedgerId() {
+        CompletableFuture<Long> future = new CompletableFuture<>();
+
+        sessionManager.getSessionId()
+                .thenCompose((sessionId) -> {
+                    ObjectNode body = mapper.createObjectNode();
+                    body.put(Fields.SESSION_ID, sessionId);
+                    return messageSender.sendRequest(Node.MetadataNodeId, Commands.Metadata.GET_LEDGER_ID, body);
+                })
+                .thenAccept((JsonNode reply) -> {
+                    JsonNode body = reply.get(Fields.BODY);
+                    String rc = body.get(Fields.RC).asText();
+
+                    switch (rc) {
+                        case ReturnCodes.OK:
+                            long ledgerId = body.get(Fields.L.LEDGER_ID).asLong();
+                            future.complete(ledgerId);
+                            break;
+                        case ReturnCodes.TIME_OUT:
+                            future.completeExceptionally(new TransientException("Operation timed out"));
+                            break;
+                        case ReturnCodes.Metadata.BAD_SESSION:
+                            future.completeExceptionally(new TransientException("Session expired"));
+                            break;
+                        default:
+                            future.completeExceptionally(new MetadataException("Failed to get ledger id", rc));
+                    }
+                });
+
+        return future;
+    }
+
     public CompletableFuture<Versioned<LedgerMetadata>> createLedgerMetadata(LedgerMetadata ledgerMetadata) {
         CompletableFuture<Versioned<LedgerMetadata>> future = new CompletableFuture<>();
 
@@ -144,7 +180,6 @@ public class LedgerManager {
 
         sessionManager.getSessionId()
                 .thenCompose((sessionId) -> {
-                    logger.logDebug("doWriteLedgerMetadata");
                     ObjectNode body = mapper.createObjectNode();
                     body.put(Fields.SESSION_ID, sessionId);
                     if (version > -1L) {

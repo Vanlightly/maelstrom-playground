@@ -28,7 +28,7 @@ public class NetworkRouter {
     }
 
     public void addNode(String nodeId) {
-        TestNetworkIO net = new TestNetworkIO(msgQueue);
+        TestNetworkIO net = new TestNetworkIO(nodeId, msgQueue);
         nodeNetworkIo.put(nodeId, net);
         ExecutorService runnerExecutor = Executors.newSingleThreadExecutor(new NodeThreadFactory(nodeId));
         runnerExecutor.submit(() -> {
@@ -43,24 +43,47 @@ public class NetworkRouter {
         nodeRunners.put(nodeId, runnerExecutor);
     }
 
+//    public boolean waitForInitOk(int nodeCount) {
+//        int initialized = 0;
+//
+//        while (!isCancelled.get()) {
+//            if (!msgQueue.isEmpty()) {
+//                String msgStr = msgQueue.poll();
+//                if (msgStr.contains("init_ok")) {
+//                    initialized++;
+//                } else {
+//
+//                }
+//            }
+//        }
+//    }
+
     public void routeMessages() {
         executorService.submit(() -> {
             try {
                 while (!isCancelled.get()) {
                     if (!msgQueue.isEmpty()) {
                         String msgStr = msgQueue.poll();
-                        JsonNode msg = mapper.readTree(msgStr);
-                        String dest = msg.get("dest").asText();
-                        String type = msg.path("body").path("type").asText();
-                        if (msg.path("body").has("in_reply_to")) {
-                            type = "reply";
-                        }
 
-                        if (nodeNetworkIo.containsKey(dest)) {
-                            System.out.println("ROUTER: Delivering " + type + " to " + dest + " msg: " + msgStr);
-                            nodeNetworkIo.get(dest).route(msgStr);
-                        } else {
-                            System.out.println("NOT ROUTABLE: To " + dest + " msg: " + msgStr);
+                        try {
+                            JsonNode msg = mapper.readTree(msgStr);
+                            String dest = msg.get("dest").asText();
+                            String source = msg.get("src").asText();
+                            String type = msg.path("body").path("type").asText();
+
+                            String reqOrReply = "request";
+                            if (msg.path("body").has("in_reply_to")) {
+                                reqOrReply = "reply";
+                            }
+
+                            System.out.println("(" + source + ")-[" + type + "]->(" + dest + ") " + reqOrReply);
+
+                            if (nodeNetworkIo.containsKey(dest)) {
+                                nodeNetworkIo.get(dest).route(msgStr);
+                            }
+                        } catch (Exception e) {
+                            System.out.println("Error with msg: " + msgStr);
+                            throw e;
                         }
                     } else {
                         Thread.sleep(10);

@@ -3,6 +3,7 @@ package com.vanlightly.bookkeeper.kv.log;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vanlightly.bookkeeper.Logger;
 import com.vanlightly.bookkeeper.MessageSender;
+import com.vanlightly.bookkeeper.OperationCancelledException;
 import com.vanlightly.bookkeeper.kv.Op;
 import com.vanlightly.bookkeeper.kv.bkclient.LedgerHandle;
 import com.vanlightly.bookkeeper.kv.bkclient.LedgerManager;
@@ -38,5 +39,11 @@ public abstract class LogClient {
 
     public void cancel() {
         isCancelled.set(true);
+    }
+
+    protected void checkForCancellation() {
+        if (isCancelled.get()) {
+            throw new OperationCancelledException();
+        }
     }
 }

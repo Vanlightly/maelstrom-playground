@@ -16,7 +16,7 @@ public class Constants {
     }
 
     public class KvStore {
-        public static final int CheckLeadershipIntervalMs = 1000;
+        public static final int CheckLeadershipIntervalMs = 10000;
         public static final int ReaderUpdateMetadataIntervalMs = 1000;
 
 

@@ -155,6 +155,7 @@ public abstract class Node implements MessageSender {
         }
         body.put(Fields.MSG_ID, nextMsgId);
         body.set("in_reply_to", msg.get(Fields.BODY).get(Fields.MSG_ID));
+        body.put(Fields.MSG_TYPE, msg.get(Fields.BODY).get(Fields.MSG_TYPE).asText());
 
         ObjectNode outMsg = mapper.createObjectNode();
         outMsg.put(Fields.SOURCE, nodeId);
@@ -174,7 +175,7 @@ public abstract class Node implements MessageSender {
     }
 
     public void handleReply(JsonNode reply) {
-        logger.logDebug("Received reply: " + reply.toString());
+        //logger.logDebug("Received reply: " + reply.toString());
         int msgId = reply.get(Fields.BODY).get(Fields.IN_REPLY_TO).asInt();
         CompletableFuture<JsonNode> replyCallback = replyCallbacks.get(msgId);
 

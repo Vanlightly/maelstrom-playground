@@ -25,14 +25,10 @@ public class Fields {
     }
 
     public class KV {
-        public final static String KV_MD_VERSION = "kv-md-version";
         public final static String LEDGER_LIST_VERSION = "ledger_list_version";
         public final static String LEDGER_LIST = "ledger_list";
         public final static String LEADER = "leader";
-        public final static String LEADER_VERSION = "leader_epoch";
-        public final static String CURSOR_VERSION = "cursor-version";
-        public final static String CURSOR_LEDGER_ID = "cursor-ledger-id";
-        public final static String CURSOR_ENTRY_ID = "cursor-entry-id";
+        public final static String LEADER_VERSION = "leader_version";
 
         public final static String KEY = "key";
         public final static String VALUE = "value";

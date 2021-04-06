@@ -13,9 +13,6 @@ import com.vanlightly.bookkeeper.network.NetworkIO;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 
 public class MetadataStoreNode extends Node {
     Map<String, Session> sessions;
@@ -32,7 +29,6 @@ public class MetadataStoreNode extends Node {
     Instant lastCheckedSessions;
     final Long expiryNs;
     final Long expiryCheckMs;
-    ScheduledExecutorService expiryScheduler;
 
     long nextSessionId;
     long nextLedgerId;
@@ -54,11 +50,6 @@ public class MetadataStoreNode extends Node {
         this.expiryNs = Constants.KeepAlives.KeepAliveExpiryMs * 1000000L;
         this.expiryCheckMs = Constants.KeepAlives.KeepAliveCheckMs;
 
-        this.expiryScheduler = Executors.newSingleThreadScheduledExecutor();
-        this.expiryScheduler.scheduleWithFixedDelay(() -> {
-            checkSessions();
-        }, this.expiryCheckMs, this.expiryCheckMs, TimeUnit.MILLISECONDS);
-
         this.nextLedgerId = -1L;
         this.nextSessionId = 0L;
     }
@@ -70,12 +61,12 @@ public class MetadataStoreNode extends Node {
 
     @Override
     boolean roleSpecificAction() {
-        return checkSessions();
+        return mayBeCheckSessions();
     }
 
     @Override
     void handleRequest(JsonNode request) {
-        logger.logDebug(request.toString());
+//        logger.logDebug("Received request: " + request.toString());
         try {
             String type = request.get(Fields.BODY).get(Fields.MSG_TYPE).asText();
             switch (type) {
@@ -87,6 +78,9 @@ public class MetadataStoreNode extends Node {
                     break;
                 case Commands.Metadata.GET_LEADER_ID:
                     handleGetLeaderId(request);
+                    break;
+                case Commands.Metadata.GET_LEDGER_ID:
+                    handleGetLedgerId(request);
                     break;
                 case Commands.Metadata.GET_LEDGER_LIST:
                     handleGetLedgerList(request);
@@ -119,32 +113,36 @@ public class MetadataStoreNode extends Node {
         return Duration.between(lastCheckedSessions, Instant.now()).toMillis() > expiryCheckMs;
     }
 
-    private boolean checkSessions() {
+    private boolean mayBeCheckSessions() {
         if (shouldCheckSessions()) {
-            try {
-                List<String> expiredNodeIds = removeExpiredSessions();
-                removeExpired(availableBookies);
-                removeExpired(availableClients);
-
-                mayBeChangeLeader();
-
-                for (String nodeId : expiredNodeIds) {
-                    send(nodeId, Commands.Metadata.SESSION_EXPIRED);
-                }
-
-                lastCheckedSessions = Instant.now();
-            } catch (Exception e) {
-                logger.logError("Failed checking for expired sessions", e);
-            }
+            checkSessions();
             return true;
         } else {
             return false;
         }
     }
 
+    private void checkSessions() {
+        try {
+            List<String> expiredNodeIds = removeExpiredSessions();
+            removeExpired(availableBookies);
+            removeExpired(availableClients);
+
+            mayBeChangeLeader();
+
+            for (String nodeId : expiredNodeIds) {
+                send(nodeId, Commands.Metadata.SESSION_EXPIRED);
+            }
+        } catch (Exception e) {
+            logger.logError("Failed checking for expired sessions", e);
+        } finally {
+            lastCheckedSessions = Instant.now();
+        }
+    }
+
     private void mayBeChangeLeader() {
         boolean leaderIsSet = !leader.equals(Constants.Metadata.NoLeader);
-        boolean leaderAvailable = availableClients.contains(leader);
+        boolean leaderAvailable = availableClients.contains(leader.getValue());
 
         /* A leader change is required if either:
             - there is no current leader
@@ -157,8 +155,14 @@ public class MetadataStoreNode extends Node {
                 // there is no leader and no available clients to become leader
             } else {
                 // the current leader is not available, so choose a new one randomly
-                leader.setValue(availableClients.stream().findFirst().get());
+                String oldLeader = leader.getValue();
+                long oldLeaderVersion = leader.getVersion();
+                String newLeader = availableClients.stream().findFirst().get();
+                leader.setValue(newLeader);
                 leader.incrementVersion();
+                long newLeaderVersion = leader.getVersion();
+                logger.logInfo("Leader change. From: " + oldLeader + ":" + oldLeaderVersion
+                        + " to: " + newLeader + ":" + newLeaderVersion);
             }
         }
     }
@@ -325,20 +329,26 @@ public class MetadataStoreNode extends Node {
         }
     }
 
+    private void handleGetLedgerId(JsonNode msg) {
+        Session session = verifySession(msg);
+        if (session.isValid()) {
+            nextLedgerId++;
+            ObjectNode replyBody = mapper.createObjectNode();
+            replyBody.put(Fields.SESSION_ID, session.getSessionId());
+            replyBody.put(Fields.L.LEDGER_ID, nextLedgerId);
+            reply(msg, ReturnCodes.OK, replyBody);
+        }
+    }
+
     private void handleCreateLedger(JsonNode msg) throws JsonProcessingException {
         Session session = verifySession(msg);
         if (session.isValid()) {
             JsonNode body = msg.get(Fields.BODY);
             LedgerMetadata md = mapper.treeToValue(body.get(Fields.M.LEDGER_METADATA), LedgerMetadata.class);
             Versioned<LedgerMetadata> newLedger = new Versioned<>(md, 0);
-
-            nextLedgerId++;
-            md.setLedgerId(nextLedgerId);
-
-            ledgers.put(nextLedgerId, newLedger);
+            ledgers.put(md.getLedgerId(), newLedger);
 
             ObjectNode res = mapper.createObjectNode();
-            res.put(Fields.L.LEDGER_ID, nextLedgerId);
             res.put(Fields.VERSION, 0);
             res.set(Fields.M.LEDGER_METADATA, mapper.valueToTree(md));
             reply(msg, ReturnCodes.OK, res);

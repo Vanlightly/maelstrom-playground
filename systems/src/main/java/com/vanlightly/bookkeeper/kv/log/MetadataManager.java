@@ -42,13 +42,11 @@ public class MetadataManager {
 
         sessionManager.getSessionId()
                 .thenCompose((sessionId) -> {
-                    logger.logDebug("send get leader request");
                     ObjectNode body = mapper.createObjectNode();
                     body.put(Fields.SESSION_ID, sessionId);
                     return messageSender.sendRequest(Node.MetadataNodeId, Commands.Metadata.GET_LEADER_ID, body);
                 })
                 .thenAccept((JsonNode msg) -> {
-                    logger.logDebug("receive get leader reply");
                     JsonNode body = msg.get(Fields.BODY);
                     String rc = body.get(Fields.RC).asText();
 
@@ -83,13 +81,11 @@ public class MetadataManager {
 
         sessionManager.getSessionId()
                 .thenCompose((sessionId) -> {
-                    logger.logDebug("send get ledger list request");
                     ObjectNode body = mapper.createObjectNode();
                     body.put(Fields.SESSION_ID, sessionId);
                     return messageSender.sendRequest(Node.MetadataNodeId, Commands.Metadata.GET_LEDGER_LIST, body);
                 })
                 .thenAccept((JsonNode msg) -> {
-                    logger.logDebug("receive get ledger list reply");
                     JsonNode body = msg.get(Fields.BODY);
                     String rc = body.get(Fields.RC).asText();
 
@@ -161,50 +157,6 @@ public class MetadataManager {
                             break;
                         default:
                             future.completeExceptionally(new MetadataException("Failed to update the ledger list", rc));
-                    }
-                });
-
-        return future;
-    }
-
-    public CompletableFuture<Versioned<Position>> updateCursor(Versioned<Position> cursor) {
-        CompletableFuture<Versioned<Position>> future = new CompletableFuture<>();
-        FutureRetries.retryTransient(future, () -> doUpdateCursor(cursor));
-        return future;
-    }
-
-    private CompletableFuture<Versioned<Position>> doUpdateCursor(Versioned<Position> cursor) {
-        CompletableFuture<Versioned<Position>> future = new CompletableFuture<>();
-
-        sessionManager.getSessionId()
-                .thenCompose((sessionId) -> {
-                    ObjectNode body = mapper.createObjectNode();
-                    body.put(Fields.SESSION_ID, sessionId);
-                    body.put(Fields.KV.CURSOR_VERSION, cursor.getVersion());
-                    body.put(Fields.KV.CURSOR_LEDGER_ID, cursor.getValue().getLedgerId());
-                    body.put(Fields.KV.CURSOR_ENTRY_ID, cursor.getValue().getEntryId());
-
-                    return messageSender.sendRequest(Node.MetadataNodeId, Commands.Metadata.CURSOR_UPDATE, body);
-                })
-                .thenAccept((JsonNode msg) -> {
-                    JsonNode body = msg.get(Fields.BODY);
-                    String rc = body.get(Fields.RC).asText();
-
-                    switch (rc) {
-                        case ReturnCodes.OK:
-                            long version = body.get(Fields.KV.CURSOR_VERSION).asLong();
-                            long ledgerId = body.get(Fields.KV.CURSOR_LEDGER_ID).asLong();
-                            long entryId = body.get(Fields.KV.CURSOR_ENTRY_ID).asLong();
-                            future.complete(new Versioned<Position>(new Position(ledgerId, entryId), version));
-                            break;
-                        case ReturnCodes.TIME_OUT:
-                            future.completeExceptionally(new TransientException("Operation timed out"));
-                            break;
-                        case ReturnCodes.Metadata.BAD_SESSION:
-                            future.completeExceptionally(new TransientException("Session expired"));
-                            break;
-                        default:
-                            future.completeExceptionally(new MetadataException("Failed to update the cursor", rc));
                     }
                 });
 

@@ -15,6 +15,7 @@ import com.vanlightly.bookkeeper.metadata.Versioned;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.BiConsumer;
@@ -44,6 +45,7 @@ public class LogReader extends LogClient {
         this.lastCheckedMetadata = Instant.now().minus(1, ChronoUnit.DAYS);
         this.pendingMetadata = false;
         this.isCatchUpReader = isCatchUpReader;
+        this.cachedLedgerList = new Versioned<>(new ArrayList<>(), -1);
     }
 
     public void start(Position cursor) {
@@ -51,44 +53,54 @@ public class LogReader extends LogClient {
         readerState = ReaderState.NO_LEDGER;
     }
 
-    public ReaderState getReaderState() {
-        return readerState;
-    }
-
     public boolean hasCaughtUp() {
         return hasCaughtUp;
     }
 
-    public void openNextLedger() {
-        long currentLedgerId = readCursor.getLedgerId();
-        long ledgerToOpen = findNextLedgerId(currentLedgerId);
+    public boolean read() {
+        return openNextLedger()
+            || readUpToLac()
+            || updateCachedLedgerMetadata();
+    }
 
-        if (ledgerToOpen == -1L) {
-            readerState = ReaderState.PENDING_LEDGER;
-            metadataManager.getLedgerList()
-                    .whenComplete((Versioned<List<Long>> vLedgerList, Throwable t) -> {
-                        if (t != null) {
-                            logger.logError("Unable to open next ledger", t);
-                            readerState = ReaderState.NO_LEDGER;
-                        } else if (cachedLedgerList.getVersion() > vLedgerList.getVersion()) {
-                            logger.logInfo("Ignoring stale ledger list, will retry open next ledger operation");
-                            readerState = ReaderState.NO_LEDGER;
-                        } else {
-                            cachedLedgerList = vLedgerList;
-                            long nextLedgerId = findNextLedgerId(currentLedgerId);
-                            if (nextLedgerId == -1L) {
-                                if (isCatchUpReader) {
-                                    hasCaughtUp = true;
-                                }
-                                logger.logInfo("No next ledger to open yet");
+    private boolean openNextLedger() {
+        if (readerState == ReaderState.NO_LEDGER) {
+            long currentLedgerId = readCursor.getLedgerId();
+            long ledgerToOpen = findNextLedgerId(currentLedgerId);
+
+            if (ledgerToOpen == -1L) {
+                readerState = ReaderState.PENDING_LEDGER;
+                metadataManager.getLedgerList()
+                        .whenComplete((Versioned<List<Long>> vLedgerList, Throwable t) -> {
+                            if (t != null) {
+                                logger.logError("Unable to open next ledger", t);
+                                readerState = ReaderState.NO_LEDGER;
+                            } else if (cachedLedgerList.getVersion() > vLedgerList.getVersion()) {
+                                logger.logInfo("Ignoring stale ledger list, will retry open next ledger operation");
                                 readerState = ReaderState.NO_LEDGER;
                             } else {
-                                openLedgerHandle(nextLedgerId);
+                                cachedLedgerList = vLedgerList;
+                                long nextLedgerId = findNextLedgerId(currentLedgerId);
+                                if (nextLedgerId == -1L) {
+                                    logger.logInfo("No next ledger to open yet");
+
+                                    if (isCatchUpReader) {
+                                        hasCaughtUp = true;
+                                        logger.logInfo("Catch-up reader has caught up");
+                                    }
+
+                                    readerState = ReaderState.NO_LEDGER;
+                                } else {
+                                    openLedgerHandle(nextLedgerId);
+                                }
                             }
-                        }
-                    });
+                        });
+            } else {
+                openLedgerHandle(ledgerToOpen);
+            }
+            return true;
         } else {
-            openLedgerHandle(ledgerToOpen);
+            return false;
         }
     }
 
@@ -133,13 +145,16 @@ public class LogReader extends LogClient {
     }
 
     private boolean shouldUpdateCachedLedgerMetadata() {
-        return !pendingMetadata &&
-                Duration.between(lastCheckedMetadata, Instant.now()).toMillis()
+        return readerState == ReaderState.READING
+                && !pendingMetadata
+                && Duration.between(lastCheckedMetadata, Instant.now()).toMillis()
                         > Constants.KvStore.ReaderUpdateMetadataIntervalMs;
     }
 
-    public boolean updateCachedLedgerMetadata() {
+    private boolean updateCachedLedgerMetadata() {
         if (shouldUpdateCachedLedgerMetadata()) {
+            lastCheckedMetadata = Instant.now();
+            pendingMetadata = true;
             metadataManager.getLedgerList()
                     .thenCompose((Versioned<List<Long>> vLedgerList) -> {
                         if (cachedLedgerList.getVersion() < vLedgerList.getVersion()) {
@@ -172,44 +187,49 @@ public class LogReader extends LogClient {
         }
     }
 
-    public void readUpToLac() {
-        Position lastPositionRead = readCursor;
-        readerState = ReaderState.READING;
+    private boolean readUpToLac() {
+        if (readerState == ReaderState.IDLE) {
+            Position lastPositionRead = readCursor;
+            readerState = ReaderState.READING;
 
-        lh.readExplicitLac()
-            .thenCompose((Long lac) -> {
-                logger.logDebug("READER: Read lac " + lac);
-                if (lac == lastPositionRead.getEntryId()) {
-                    if (lh.getCachedLedgerMetadata().getValue().getStatus() == LedgerStatus.CLOSED) {
-                        logger.logDebug("READER: Reached end of ledger");
-                        Position endOfLedgerPos = new Position(lastPositionRead.getLedgerId(),
-                            lastPositionRead.getEntryId(), true);
-                        return CompletableFuture.completedFuture(endOfLedgerPos);
-                    } else {
-                        logger.logDebug("READER: No entries to read right now");
-                        return CompletableFuture.completedFuture(lastPositionRead);
-                    }
-                } else {
-                    Position next = new Position(lastPositionRead.getLedgerId(),
-                            lastPositionRead.getEntryId() + 1);
-                    return readNext(lh, next);
-                }
-            })
-            .whenComplete((Position finalPositionRead, Throwable t) -> {
-                if (t != null) {
-                    logger.logError("Failed reading ledger", t);
-                    readerState = ReaderState.IDLE;
-                } else {
-                    if (finalPositionRead.isEndOfLedger()) {
-                        readerState = ReaderState.NO_LEDGER;
-                    } else {
-                        readerState = ReaderState.IDLE;
-                    }
-                }
-            });
+            lh.readExplicitLac()
+                    .thenCompose((Long lac) -> {
+                        logger.logDebug("READER: Read lac " + lac);
+                        if (lac == lastPositionRead.getEntryId()) {
+                            if (lh.getCachedLedgerMetadata().getValue().getStatus() == LedgerStatus.CLOSED) {
+                                logger.logDebug("READER: Reached end of ledger");
+                                Position endOfLedgerPos = new Position(lastPositionRead.getLedgerId(),
+                                        lastPositionRead.getEntryId(), true);
+                                return CompletableFuture.completedFuture(endOfLedgerPos);
+                            } else {
+                                logger.logDebug("READER: No entries to read right now");
+                                return CompletableFuture.completedFuture(lastPositionRead);
+                            }
+                        } else {
+                            Position next = new Position(lastPositionRead.getLedgerId(),
+                                    lastPositionRead.getEntryId() + 1);
+                            return readNext(lh, next);
+                        }
+                    })
+                    .whenComplete((Position finalPositionRead, Throwable t) -> {
+                        if (t != null) {
+                            logger.logError("Failed reading ledger", t);
+                            readerState = ReaderState.IDLE;
+                        } else {
+                            if (finalPositionRead.isEndOfLedger()) {
+                                readerState = ReaderState.NO_LEDGER;
+                            } else {
+                                readerState = ReaderState.IDLE;
+                            }
+                        }
+                    });
+            return true;
+        } else {
+            return false;
+        }
     }
 
-    public CompletableFuture<Position> readNext(LedgerHandle lh, Position prev) {
+    private CompletableFuture<Position> readNext(LedgerHandle lh, Position prev) {
         if (lh.getLastAddConfirmed() == prev.getEntryId()) {
             logger.logDebug("READER: Reached LAC");
             // we can't safely read any further
@@ -217,15 +237,19 @@ public class LogReader extends LogClient {
         }
 
         return lh.read(prev.getEntryId() + 1)
-                .thenCompose((Entry e) -> {
-                    logger.logDebug("READER: Read entry " + e.getEntryId());
+                .thenCompose((Entry entry) -> {
+                    logger.logDebug("READER: Read entry " + entry.getEntryId());
+
                     // add to kv store
+                    Op op = Op.stringToOp(entry.getValue());
+                    Position pos = new Position(entry.getLedgerId(), entry.getEntryId());
+                    cursorUpdater.accept(pos, op);
 
                     // update position
-                    Position currPos = new Position(e.getLedgerId(),
-                            e.getEntryId());
-                    readCursor = currPos;
-                    return readNext(lh, currPos);
+                    readCursor = pos;
+
+                    // read the next entry
+                    return readNext(lh, pos);
                 });
     }
 }
