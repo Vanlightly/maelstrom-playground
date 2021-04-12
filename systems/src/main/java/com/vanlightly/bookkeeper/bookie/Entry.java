@@ -1,6 +1,4 @@
-package com.vanlightly.bookkeeper.kv.bkclient;
-
-import com.vanlightly.bookkeeper.kv.log.Position;
+package com.vanlightly.bookkeeper.bookie;
 
 public class Entry {
     long ledgerId;
@@ -35,17 +33,5 @@ public class Entry {
 
     public long getLac() {
         return lac;
-    }
-
-    public Position getPosition() {
-        return new Position(ledgerId, entryId);
-    }
-
-    @Override
-    public String toString() {
-        return "Entry{" +
-                "ledgerId=" + ledgerId +
-                ", entryId=" + entryId +
-                '}';
     }
 }

@@ -3,13 +3,20 @@ package com.vanlightly.bookkeeper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.vanlightly.bookkeeper.bookie.Entry;
 import com.vanlightly.bookkeeper.bookie.Ledger;
 import com.vanlightly.bookkeeper.network.NetworkIO;
 
+import java.time.Duration;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 
 public class BookieNode extends Node {
     Map<Long, Ledger> ledgers;
+
+    private Instant lastCheckedExpiredReads;
 
     public BookieNode(String nodeId,
                       NetworkIO net,
@@ -18,6 +25,7 @@ public class BookieNode extends Node {
                       ManagerBuilder builder) {
         super(nodeId, true, net, logger, mapper, builder);
         ledgers = new HashMap<>();
+        lastCheckedExpiredReads = Instant.now().minus(1, ChronoUnit.DAYS);
     }
 
     @Override
@@ -27,13 +35,19 @@ public class BookieNode extends Node {
 
     @Override
     boolean roleSpecificAction() {
-        return sessionManager.maintainSession();
+        return sessionManager.maintainSession()
+                || expireLongPollLacReads();
     }
 
     @Override
     void handleRequest(JsonNode request) {
         //logger.logDebug("Received request: " + request.toString());
+        if (mayBeRedirect(request)) {
+            return;
+        }
+
         String type = request.get(Fields.BODY).get(Fields.MSG_TYPE).asText();
+
         if (sessionManager.handlesRequest(type)) {
             sessionManager.handleRequest(request);
         } else {
@@ -47,6 +61,9 @@ public class BookieNode extends Node {
                 case Commands.Bookie.READ_LAC:
                     handleReadLac(request);
                     break;
+                case Commands.Bookie.READ_LAC_LONG_POLL:
+                    handleReadLacLongPoll(request);
+                    break;
                 case Commands.Bookie.RECOVERY_ADD_ENTRY:
                     handleAddEntry(request, true);
                     break;
@@ -59,6 +76,16 @@ public class BookieNode extends Node {
         }
     }
 
+    private boolean mayBeRedirect(JsonNode request) {
+        String type = request.get(Fields.BODY).get(Fields.MSG_TYPE).asText();
+        if (Constants.KvStore.Ops.Types.contains(type)) {
+            proxy(request, Node.getFirstKvStoreNodeId());
+            return true;
+        } else {
+            return false;
+        }
+    }
+
     private void handleAddEntry(JsonNode msg, boolean isRecoveryAdd) {
         JsonNode body = msg.get(Fields.BODY);
         long ledgerId = body.get(Fields.L.LEDGER_ID).asLong();
@@ -68,7 +95,7 @@ public class BookieNode extends Node {
 
         Ledger ledger = ledgers.get(ledgerId);
         if (ledger == null) {
-            ledger = new Ledger();
+            ledger = new Ledger(ledgerId);
             ledgers.put(ledgerId, ledger);
         }
 
@@ -89,12 +116,16 @@ public class BookieNode extends Node {
         long ledgerId = body.get(Fields.L.LEDGER_ID).asLong();
         long entryId = body.get(Fields.L.ENTRY_ID).asLong();
 
+        Ledger ledger = ledgers.get(ledgerId);
+
         ObjectNode res = mapper.createObjectNode();
         res.put(Fields.L.LEDGER_ID, ledgerId);
         res.put(Fields.L.ENTRY_ID, entryId);
+        res.put(Fields.L.LAC, ledger.getLac());
 
-        Ledger ledger = ledgers.get(ledgerId);
-        if (ledger.hasEntry(entryId)) {
+        if (entryId == -1L) {
+            reply(msg, ReturnCodes.OK, res);
+        } else if (ledger.hasEntry(entryId)) {
             res.put(Fields.L.VALUE, ledger.read(entryId));
             reply(msg, ReturnCodes.OK, res);
         } else {
@@ -116,6 +147,48 @@ public class BookieNode extends Node {
         Ledger ledger = ledgers.get(ledgerId);
         res.put(Fields.L.LAC, ledger.getLac());
         reply(msg, ReturnCodes.OK, res);
+    }
+
+    private void handleReadLacLongPoll(JsonNode msg) {
+        if (!checkLedgerOk(msg, false)) {
+            return;
+        }
+
+        JsonNode body = msg.get(Fields.BODY);
+        long ledgerId = body.get(Fields.L.LEDGER_ID).asLong();
+        long previousLac = body.get(Fields.L.PREVIOUS_LAC).asLong();
+        int timeoutMs = body.get(Fields.L.LONG_POLL_TIMEOUT_MS).asInt();
+
+        Ledger ledger = ledgers.get(ledgerId);
+        CompletableFuture<Entry> future = new CompletableFuture<>();
+        ledger.addLacFuture(previousLac, timeoutMs, future);
+
+        future.thenAccept((Entry entry) -> {
+            ObjectNode res = mapper.createObjectNode();
+            res.put(Fields.L.LEDGER_ID, ledgerId);
+            res.put(Fields.L.ENTRY_ID, entry.getEntryId());
+            res.put(Fields.L.LAC, entry.getLac());
+            if (entry.getValue() != null) {
+                res.put(Fields.L.VALUE, entry.getValue());
+            }
+            reply(msg, ReturnCodes.OK, res);
+        });
+    }
+
+    private boolean expireLongPollLacReads() {
+        if (Duration.between(lastCheckedExpiredReads, Instant.now()).toMillis() > Constants.Bookie.CheckExpiredLongPollReadsIntervalMs) {
+            boolean expired = false;
+            for (Ledger ledger : ledgers.values()) {
+                if (ledger.expireLacLongPollReads()) {
+                    expired = true;
+                }
+            }
+            lastCheckedExpiredReads = Instant.now();
+
+            return expired;
+        } else {
+            return false;
+        }
     }
 
     private boolean checkLedgerOk(JsonNode msg, boolean isRecoveryOp) {

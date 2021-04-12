@@ -2,6 +2,7 @@ package com.vanlightly.bookkeeper.kv;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
@@ -29,10 +30,23 @@ public class Op {
         this.committed = committed;
     }
 
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        Op op = (Op) o;
+        return Objects.equals(getFields(), op.getFields());
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(getFields(), isCommitted());
+    }
+
     public static Op stringToOp(String opStr) {
         Map<String,String> opFields = new HashMap<>();
 
-        for (String keyVal : opStr.split("|")) {
+        for (String keyVal : opStr.split(",")) {
             String[] parts = keyVal.split("=");
             opFields.put(parts[0], parts[1]);
         }

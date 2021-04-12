@@ -112,7 +112,12 @@ public class LedgerManager {
                         default:
                             future.completeExceptionally(new MetadataException("Failed to read ledger metadata", rc));
                     }
-                });
+                })
+            .whenComplete((Void v, Throwable t) -> {
+                if (t != null) {
+                    logger.logError("Failed reading ledger metadata", t);
+                }
+            });
 
         return future;
     }
@@ -213,6 +218,11 @@ public class LedgerManager {
                             break;
                         default:
                             future.completeExceptionally(new MetadataException("Failed to write ledger metadata with command: " + command, rc));
+                    }
+                })
+                .whenComplete((Void v, Throwable t) -> {
+                    if (t != null) {
+                        logger.logError("Failed writing ledger metadata", t);
                     }
                 });
 

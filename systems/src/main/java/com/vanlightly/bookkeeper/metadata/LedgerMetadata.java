@@ -1,5 +1,8 @@
 package com.vanlightly.bookkeeper.metadata;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import java.util.List;
 import java.util.NavigableMap;
 import java.util.TreeMap;
@@ -13,6 +16,7 @@ public class LedgerMetadata {
     LedgerStatus status;
 
     public LedgerMetadata() {
+        this.lastEntryId = -1L;
     }
 
     public LedgerMetadata(long ledgerId,
@@ -25,6 +29,7 @@ public class LedgerMetadata {
         this.ensembles = new TreeMap<>();
         this.ensembles.put(0L, firstEnsemble);
         this.status = LedgerStatus.OPEN;
+        this.lastEntryId = -1L;
     }
 
     public LedgerMetadata(LedgerMetadata md) {
@@ -35,14 +40,7 @@ public class LedgerMetadata {
         this.status = md.getStatus();
     }
 
-    public void addEnsemble(Long entryId, List<String> ensemble) {
-        ensembles.put(entryId, ensemble);
-    }
-
-    public void setLastEntryId(Long lastEntryId) {
-        this.lastEntryId = lastEntryId;
-    }
-
+    @JsonProperty(value = "ledgerId")
     public long getLedgerId() {
         return ledgerId;
     }
@@ -51,14 +49,25 @@ public class LedgerMetadata {
         this.ledgerId = ledgerId;
     }
 
+    @JsonProperty(value = "writeQuorum")
     public int getWriteQuorum() {
         return writeQuorum;
     }
 
+    public void setWriteQuorum(int writeQuorum) {
+        this.writeQuorum = writeQuorum;
+    }
+
+    @JsonProperty(value = "ackQuorum")
     public int getAckQuorum() {
         return ackQuorum;
     }
 
+    public void setAckQuorum(int ackQuorum) {
+        this.ackQuorum = ackQuorum;
+    }
+
+    @JsonProperty(value = "ensembles")
     public NavigableMap<Long, List<String>> getEnsembles() {
         return ensembles;
     }
@@ -67,14 +76,7 @@ public class LedgerMetadata {
         this.ensembles = ensembles;
     }
 
-    public List<String> getCurrentEnsemble() {
-        return ensembles.lastEntry().getValue();
-    }
-
-    public void replaceCurrentEnsemble(List<String> ensemble) {
-        ensembles.put(ensembles.lastKey(), ensemble);
-    }
-
+    @JsonProperty(value = "lastEntryId")
     public long getLastEntryId() {
         return lastEntryId;
     }
@@ -83,11 +85,27 @@ public class LedgerMetadata {
         this.lastEntryId = lastEntryId;
     }
 
+    @JsonProperty(value = "status")
     public LedgerStatus getStatus() {
         return status;
     }
 
     public void setStatus(LedgerStatus status) {
         this.status = status;
+    }
+
+    @JsonIgnore
+    public void addEnsemble(Long entryId, List<String> ensemble) {
+        ensembles.put(entryId, ensemble);
+    }
+
+    @JsonIgnore
+    public List<String> getCurrentEnsemble() {
+        return ensembles.lastEntry().getValue();
+    }
+
+    @JsonIgnore
+    public void replaceCurrentEnsemble(List<String> ensemble) {
+        ensembles.put(ensembles.lastKey(), ensemble);
     }
 }

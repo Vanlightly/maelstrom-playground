@@ -1,5 +1,8 @@
 package com.vanlightly.bookkeeper;
 
+import java.util.Arrays;
+import java.util.List;
+
 public class Constants {
     public class Metadata {
         public static final String NoLeader = "none";
@@ -15,15 +18,27 @@ public class Constants {
         public static final int TimeoutMs = 6000;
     }
 
-    public class KvStore {
+    public static class Bookie {
+        public static final int CheckExpiredLongPollReadsIntervalMs = 1000;
+    }
+
+    public static class KvStore {
         public static final int CheckLeadershipIntervalMs = 10000;
         public static final int ReaderUpdateMetadataIntervalMs = 1000;
+        public static final int MaxMsSinceLastOp = 1000;
+        public static final int LongPollTimeoutMs = 1000;
 
 
-        public class Ops {
+        public static class Ops {
             public static final String READ = "read";
             public static final String WRITE = "write";
             public static final String CAS = "cas";
+            public static final String NOOP = "no-op";
+
+            public static final List<String> Types =
+                    Arrays.asList(Ops.READ,
+                            Ops.WRITE,
+                            Ops.CAS);
         }
     }
 }

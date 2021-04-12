@@ -16,6 +16,11 @@ public class Position {
         this.isEndOfLedger = isEndOfLedger;
     }
 
+    public Position(Position pos) {
+        this.ledgerId = pos.getLedgerId();
+        this.entryId = pos.getEntryId();
+    }
+
     public long getLedgerId() {
         return ledgerId;
     }

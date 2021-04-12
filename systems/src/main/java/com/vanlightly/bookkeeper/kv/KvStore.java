@@ -5,17 +5,20 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.vanlightly.bookkeeper.Constants;
 import com.vanlightly.bookkeeper.Fields;
+import com.vanlightly.bookkeeper.Logger;
 
 import java.util.HashMap;
 import java.util.Map;
 import java.util.stream.Collectors;
 
 public class KvStore {
+    Logger logger;
     Map<String, String> store;
     ObjectMapper mapper;
 
-    public KvStore(ObjectMapper mapper) {
+    public KvStore(ObjectMapper mapper, Logger logger) {
         this.mapper = mapper;
+        this.logger = logger;
         this.store = new HashMap<>();
     }
 
@@ -60,6 +63,8 @@ public class KvStore {
             default:
                 throw new RuntimeException("Operation not supported");
         }
+
+        logger.logDebug("Apply result: " + body + " KV: " + store);
 
         return body;
     }

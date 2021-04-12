@@ -22,7 +22,6 @@ public abstract class Node implements MessageSender {
 
     private NavigableMap<Long, JsonNode> pendingReplyDeadlines;
     private Queue<JsonNode> timedOutCommands;
-    private final int timeoutMs;
     private Map<Integer, CompletableFuture<JsonNode>> replyCallbacks;
 
     public Node(String nodeId,
@@ -48,7 +47,6 @@ public abstract class Node implements MessageSender {
 
         this.nextMsgId = 1;
         this.pendingReplyDeadlines = new TreeMap<>();
-        this.timeoutMs = Constants.Timeouts.TimeoutMs;
         this.timedOutCommands = new ArrayDeque<>();
         this.replyCallbacks = new HashMap<>();
     }
@@ -62,6 +60,10 @@ public abstract class Node implements MessageSender {
         } else {
             return NodeType.KvStore;
         }
+    }
+
+    public static String getFirstKvStoreNodeId() {
+        return "n5";
     }
 
     public Logger getLogger() {
@@ -100,11 +102,11 @@ public abstract class Node implements MessageSender {
 
     public void send(String destId, String command) {
         ObjectNode body = mapper.createObjectNode();
-        sendRequest(destId, command, body, null);
+        sendRequest(destId, command, body, null, Constants.Timeouts.TimeoutMs);
     }
 
     public void send(String destId, String command, ObjectNode body) {
-        sendRequest(destId, command, body, null);
+        sendRequest(destId, command, body, null, Constants.Timeouts.TimeoutMs);
     }
 
     public CompletableFuture<JsonNode> sendRequest(String destId, String command) {
@@ -114,11 +116,21 @@ public abstract class Node implements MessageSender {
 
     public CompletableFuture<JsonNode> sendRequest(String destId, String command, ObjectNode body) {
         CompletableFuture<JsonNode> replyFuture = new CompletableFuture<>();
-        sendRequest(destId, command, body, replyFuture);
+        sendRequest(destId, command, body, replyFuture, Constants.Timeouts.TimeoutMs);
         return replyFuture;
     }
 
-    private void sendRequest(String destId, String command, ObjectNode body, CompletableFuture<JsonNode> replyFuture) {
+    public CompletableFuture<JsonNode> sendRequest(String destId, String command, ObjectNode body, int timeoutMs) {
+        CompletableFuture<JsonNode> replyFuture = new CompletableFuture<>();
+        sendRequest(destId, command, body, replyFuture, timeoutMs);
+        return replyFuture;
+    }
+
+    private void sendRequest(String destId,
+                             String command,
+                             ObjectNode body,
+                             CompletableFuture<JsonNode> replyFuture,
+                             int timeoutMs) {
         nextMsgId++;
 
         if (body == null) {
@@ -163,6 +175,29 @@ public abstract class Node implements MessageSender {
         outMsg.set(Fields.BODY, body);
 
         net.write(outMsg.toString());
+    }
+
+    protected void replyWithError(JsonNode msg, int errorCode, String errorText) {
+        nextMsgId++;
+        ObjectNode errorBody = mapper.createObjectNode();
+        errorBody.put(Fields.MSG_TYPE, "error");
+        errorBody.put("code", errorCode);
+        errorBody.put("text", errorText);
+        errorBody.put(Fields.MSG_ID, nextMsgId);
+        errorBody.set("in_reply_to", msg.get(Fields.BODY).get(Fields.MSG_ID));
+
+        ObjectNode outMsg = mapper.createObjectNode();
+        outMsg.put(Fields.SOURCE, nodeId);
+        outMsg.put(Fields.DEST, msg.get(Fields.SOURCE).asText());
+        outMsg.set(Fields.BODY, errorBody);
+
+        net.write(outMsg.toString());
+    }
+
+    protected void proxy(JsonNode msg, String dest) {
+        ObjectNode proxiedMsg = (ObjectNode)msg;
+        proxiedMsg.put(Fields.DEST, dest);
+        net.write(proxiedMsg.toString());
     }
 
     public boolean handleTimeout() {

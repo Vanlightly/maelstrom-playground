@@ -67,6 +67,10 @@ public class MetadataStoreNode extends Node {
     @Override
     void handleRequest(JsonNode request) {
 //        logger.logDebug("Received request: " + request.toString());
+        if (mayBeRedirect(request)) {
+            return;
+        }
+
         try {
             String type = request.get(Fields.BODY).get(Fields.MSG_TYPE).asText();
             switch (type) {
@@ -292,6 +296,7 @@ public class MetadataStoreNode extends Node {
             ObjectNode replyBody = mapper.createObjectNode();
             replyBody.put(Fields.SESSION_ID, session.getSessionId());
             replyBody.put(Fields.L.LEDGER_ID, current.getValue().getLedgerId());
+            replyBody.put(Fields.VERSION, current.getVersion());
             replyBody.set(Fields.M.LEDGER_METADATA, mapper.readTree(mapper.writeValueAsString(current.getValue())));
             reply(msg, ReturnCodes.OK, replyBody);
         }
@@ -301,30 +306,29 @@ public class MetadataStoreNode extends Node {
         Session session = verifySession(msg);
         if (session.isValid()) {
             JsonNode body = msg.get(Fields.BODY);
-            long ledgerId = body.get(Fields.L.LEDGER_ID).asLong();
+            long version = body.get(Fields.VERSION).asInt();
+            LedgerMetadata updatedMd = mapper.treeToValue(body.get("ledger_metadata"), LedgerMetadata.class);
+            Versioned<LedgerMetadata> vUpdatedMd = new Versioned<>(updatedMd, version);
 
-            Versioned<LedgerMetadata> current = ledgers.get(ledgerId);
-            if (current == null) {
+            Versioned<LedgerMetadata> vCurrentMd = ledgers.get(updatedMd.getLedgerId());
+            if (vCurrentMd == null) {
                 reply(msg, ReturnCodes.Metadata.NO_SUCH_LEDGER);
                 return;
             }
 
-            long version = body.get(Fields.VERSION).asInt();
-            LedgerMetadata md = mapper.treeToValue(body.get("metadata"), LedgerMetadata.class);
-            Versioned<LedgerMetadata> updated = new Versioned<>(md, version);
-
-            if (updated.getVersion() != current.getVersion()) {
+            if (vUpdatedMd.getVersion() != vCurrentMd.getVersion()) {
                 reply(msg, ReturnCodes.Metadata.BAD_VERSION);
                 return;
             }
 
-            updated.incrementVersion();
-            ledgers.put(ledgerId, updated);
+            vUpdatedMd.incrementVersion();
+            ledgers.put(updatedMd.getLedgerId(), vUpdatedMd);
 
             ObjectNode replyBody = mapper.createObjectNode();
             replyBody.put(Fields.SESSION_ID, session.getSessionId());
-            replyBody.put(Fields.L.LEDGER_ID, updated.getValue().getLedgerId());
-            replyBody.set(Fields.M.LEDGER_METADATA, mapper.readTree(mapper.writeValueAsString(updated.getValue())));
+            replyBody.put(Fields.L.LEDGER_ID, updatedMd.getLedgerId());
+            replyBody.put(Fields.VERSION, vUpdatedMd.getVersion());
+            replyBody.set(Fields.M.LEDGER_METADATA, mapper.readTree(mapper.writeValueAsString(updatedMd)));
             reply(msg, ReturnCodes.OK, replyBody);
         }
     }
@@ -344,13 +348,13 @@ public class MetadataStoreNode extends Node {
         Session session = verifySession(msg);
         if (session.isValid()) {
             JsonNode body = msg.get(Fields.BODY);
-            LedgerMetadata md = mapper.treeToValue(body.get(Fields.M.LEDGER_METADATA), LedgerMetadata.class);
-            Versioned<LedgerMetadata> newLedger = new Versioned<>(md, 0);
-            ledgers.put(md.getLedgerId(), newLedger);
+            LedgerMetadata ledgerMd = mapper.treeToValue(body.get(Fields.M.LEDGER_METADATA), LedgerMetadata.class);
+            Versioned<LedgerMetadata> vLedgerMd = new Versioned<>(ledgerMd, 0);
+            ledgers.put(ledgerMd.getLedgerId(), vLedgerMd);
 
             ObjectNode res = mapper.createObjectNode();
             res.put(Fields.VERSION, 0);
-            res.set(Fields.M.LEDGER_METADATA, mapper.valueToTree(md));
+            res.set(Fields.M.LEDGER_METADATA, mapper.valueToTree(ledgerMd));
             reply(msg, ReturnCodes.OK, res);
         }
     }
@@ -394,5 +398,15 @@ public class MetadataStoreNode extends Node {
     private void renewSession(Session session) {
         long renewDeadline = System.nanoTime() + expiryNs;
         session.setRenewDeadline(renewDeadline);
+    }
+
+    private boolean mayBeRedirect(JsonNode request) {
+        String type = request.get(Fields.BODY).get(Fields.MSG_TYPE).asText();
+        if (Constants.KvStore.Ops.Types.contains(type)) {
+            proxy(request, Node.getFirstKvStoreNodeId());
+            return true;
+        } else {
+            return false;
+        }
     }
 }

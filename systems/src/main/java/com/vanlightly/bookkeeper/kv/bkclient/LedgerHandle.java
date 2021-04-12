@@ -98,28 +98,30 @@ public class LedgerHandle {
         return future;
     }
 
-    public CompletableFuture<Entry> read(long entryId) {
-        CompletableFuture<Entry> future = new CompletableFuture<>();
-        FutureRetries.retryTransient(future, () ->
-                doRead(entryId, 0, false, false));
-        return future;
+    public CompletableFuture<Result<Entry>> read(long entryId) {
+        return doRead(entryId, 0, false, 0);
     }
 
-    public CompletableFuture<Entry> recoveryRead(long entryId) {
-        CompletableFuture<Entry> future = new CompletableFuture<>();
-        FutureRetries.retryTransient(future, () ->
-                doRead(entryId, 0, false, true));
-        return future;
+    public CompletableFuture<Result<Entry>> recoveryRead(long entryId) {
+        return doRead(entryId, 0, true, 0);
     }
 
-    private CompletableFuture<Entry> doRead(long entryId, int bookieIndex,
-                                            boolean isRetryable, boolean isRecoveryRead) {
+    /*
+        Performs a read against a single bookie. If a non-success response is received, it
+        sequentially tries the next bookie until either a success response or there are no
+        more bookies left to try
+     */
+    private CompletableFuture<Result<Entry>> doRead(long entryId,
+                                                    int bookieIndex,
+                                                    boolean isRecoveryRead,
+                                                    final int unknown) {
         ObjectNode readReq = mapper.createObjectNode();
         readReq.put(Fields.L.LEDGER_ID, versionedMetadata.getValue().getLedgerId());
         readReq.put(Fields.L.ENTRY_ID, entryId);
         readReq.put(Fields.L.RECOVERY, isRecoveryRead);
         readReq.put(Fields.L.FENCE, isRecoveryRead);
         String bookieId = versionedMetadata.getValue().getCurrentEnsemble().get(bookieIndex);
+
         return messageSender.sendRequest(bookieId, Commands.Bookie.READ_ENTRY, readReq)
             .thenCompose((JsonNode reply) -> {
                 JsonNode body = reply.get(Fields.BODY);
@@ -134,101 +136,147 @@ public class LedgerHandle {
                         Entry entry = new Entry(
                                 body.get(Fields.L.LEDGER_ID).asLong(),
                                 body.get(Fields.L.ENTRY_ID).asLong(),
+                                body.get(Fields.L.LAC).asLong(),
                                 body.get(Fields.L.VALUE).asText());
-                        return CompletableFuture.completedFuture(entry);
+                        return CompletableFuture.completedFuture(new Result<>(ReturnCodes.OK, entry));
                 } else {
-                    boolean retryable = isRetryable || code.equals(ReturnCodes.TIME_OUT);
+                    int unknown1 = unknown;
+                    if (!code.equals(ReturnCodes.Bookie.NO_SUCH_ENTRY)
+                            && !code.equals(ReturnCodes.Bookie.NO_SUCH_LEDGER)) {
+                        unknown1++;
+                    }
+
                     int nextBookieIndex = bookieIndex + 1;
                     if (nextBookieIndex >= versionedMetadata.getValue().getWriteQuorum()) {
-                        // no more bookies to try
-                        if (retryable) {
-                            return FutureRetries.<Entry>retryableFailedFuture("No success responses, but read can be retried due to timeouts");
+                        if (unknown1 >= 0) {
+                            return CompletableFuture.completedFuture(new Result<>(ReturnCodes.Ledger.UNKNOWN, null));
                         } else {
-                            return FutureRetries.<Entry>nonRetryableFailedFuture(new BkException("No success responses", code));
+                            return CompletableFuture.completedFuture(new Result<>(code, null));
                         }
                     } else {
-                        return doRead(entryId, nextBookieIndex, retryable, isRecoveryRead);
+                        return doRead(entryId, nextBookieIndex, isRecoveryRead, unknown1);
                     }
                 }
             });
     }
 
-    public CompletableFuture<Long> readExplicitLac() {
-        if (versionedMetadata.getValue().getStatus() == LedgerStatus.CLOSED) {
-            lastAddConfirmed = versionedMetadata.getValue().getLastEntryId();
-            return CompletableFuture.completedFuture(lastAddConfirmed);
-        }
-
-        return quorumRead(-1L)
-                .thenApply((List<Entry> entries) ->
-                        entries.stream().map(x -> x.getEntryId()).max(Long::compare).get());
+    public CompletableFuture<Result<Entry>> readLac() {
+        return parallelRead(-1L, Commands.Bookie.READ_LAC, true);
     }
 
-    public CompletableFuture<List<Entry>> quorumRead(long entryId) {
-        CompletableFuture<List<Entry>> readFuture = new CompletableFuture<>();
+    public CompletableFuture<Result<Entry>> lacLongPollRead() {
+        return parallelRead(lastAddConfirmed, Commands.Bookie.READ_LAC_LONG_POLL, false);
+    }
+
+    /*
+        Sends a read all the whole ensemble in parallel and returns the entry with the highest LAC
+        as long as enough bookies (AckQuorum) respond positively.
+     */
+    public CompletableFuture<Result<Entry>> parallelRead(long entryId, String readCommand,
+                                                         boolean requiresQuorum) {
+        CompletableFuture<Result<Entry>> readFuture = new CompletableFuture<>();
 
         ObjectNode readReq = mapper.createObjectNode();
         readReq.put(Fields.L.LEDGER_ID, versionedMetadata.getValue().getLedgerId());
-        readReq.put(Fields.L.ENTRY_ID, entryId);
-        CompletableFuture<Entry>[] futures = new CompletableFuture[versionedMetadata.getValue().getWriteQuorum()];
+
+        if (readCommand.equals(Commands.Bookie.READ_LAC_LONG_POLL)) {
+            readReq.put(Fields.L.PREVIOUS_LAC, entryId);
+            readReq.put(Fields.L.LONG_POLL_TIMEOUT_MS, Constants.KvStore.LongPollTimeoutMs);
+        } else {
+            readReq.put(Fields.L.ENTRY_ID, entryId);
+        }
+
+        CompletableFuture<Result<Entry>>[] futures = new CompletableFuture[versionedMetadata.getValue().getWriteQuorum()];
 
         List<String> bookies = versionedMetadata.getValue().getCurrentEnsemble();
         int writeQuorum = versionedMetadata.getValue().getWriteQuorum();
         for (int b=0; b<writeQuorum; b++) {
             String bookieId = bookies.get(b);
-            CompletableFuture<Entry> future = messageSender.sendRequest(bookieId,
-                                                Commands.Bookie.READ_ENTRY, readReq)
-                    .thenCompose((JsonNode reply) -> {
+            CompletableFuture<Result<Entry>> future =
+                    messageSender.sendRequest(bookieId, readCommand, readReq,
+                            Constants.KvStore.LongPollTimeoutMs*3)
+                    .thenApply((JsonNode reply) -> {
                         JsonNode body = reply.get(Fields.BODY);
                         String code = body.get(Fields.RC).asText();
                         if (code.equals(ReturnCodes.OK)) {
                             long lac = body.get(Fields.L.LAC).asLong();
                             this.updateLac(lac);
+
                             Entry entry = new Entry(
                                     body.get(Fields.L.LEDGER_ID).asLong(),
                                     body.get(Fields.L.ENTRY_ID).asLong(),
-                                    body.get(Fields.L.VALUE).asText());
-                            return CompletableFuture.completedFuture(entry);
+                                    body.get(Fields.L.LAC).asLong(),
+                                    body.path(Fields.L.VALUE).asText());
+                            return new Result<>(code, entry);
                         } else {
-                            boolean retryable = code.equals(ReturnCodes.TIME_OUT);
-                            if (retryable) {
-                                return FutureRetries.<Entry>retryableFailedFuture("Non-success response, but read can be retried due to timeouts");
-                            } else {
-                                return FutureRetries.<Entry>nonRetryableFailedFuture(new BkException("Non-success response", code));
-                            }
+                            return new Result<>(code, null);
                         }
                     });
             futures[b] = future;
         }
 
-        CompletableFuture.allOf(futures).
-            thenRun(() -> {
-                List<Entry> entries = new ArrayList<>();
-                int unknown = 0;
+        CompletableFuture<Void> allWithFailFast = CompletableFuture.allOf(futures);
+        Arrays.stream(futures)
+                .forEach(f -> f.exceptionally(e -> {
+                    allWithFailFast.completeExceptionally(e);
+                    return null;
+                }));
 
-                for (int b=0; b<writeQuorum; b++) {
-                    CompletableFuture<Entry> future = futures[b];
-                    try {
-                        Entry entry = future.get();
-                        entries.add(entry);
-                    } catch (TransientException e) {
-                        unknown++;
-                    } catch (Exception ignored) {}
+        allWithFailFast.
+            whenComplete((Void v, Throwable t) -> {
+                if (t != null) {
+                    readFuture.completeExceptionally(t);
+                    return;
                 }
 
-                int required = (versionedMetadata.getValue().getWriteQuorum()
-                                - versionedMetadata.getValue().getAckQuorum()) + 1;
+                int unknown = 0;
+                int positive = 0;
+                int negative = 0;
+                Entry entry = null;
 
-                if (unknown >= versionedMetadata.getValue().getAckQuorum()) {
-                    readFuture.completeExceptionally(new BkException("Not enough explicit responses", ReturnCodes.Bookie.NOT_ENOUGH_EXPLICIT_RESPONSES));
-                } else if (entries.size() >= required) {
-                    readFuture.complete(entries);
+                for (int b=0; b<writeQuorum; b++) {
+                    CompletableFuture<Result<Entry>> future = futures[b];
+                    try {
+                        Result<Entry> result = future.get();
+                        if (result.getCode().equals(ReturnCodes.OK)) {
+                            // return the entry with the highest LAC
+                            if (entry == null) {
+                                entry = result.getData();
+                            } else if (entry.getLac() < result.getData().getLac()) {
+                                entry = result.getData();
+                            }
+                            positive++;
+                        } else if (result.getCode().equals(ReturnCodes.Bookie.NO_SUCH_LEDGER) ||
+                                result.getCode().equals(ReturnCodes.Bookie.NO_SUCH_ENTRY)) {
+                            negative++;
+                        } else {
+                            unknown++;
+                        }
+                    } catch (Throwable t2) {
+                        logger.logError("Failed read", t2);
+                        unknown++;
+                    }
+                }
+
+                int required = 1;
+                if (requiresQuorum) {
+                    required = minForAckQuorum(versionedMetadata.getValue());
+                }
+
+                if (positive >= required) {
+                    readFuture.complete(new Result<>(ReturnCodes.OK, entry));
+                } else if (unknown >= versionedMetadata.getValue().getAckQuorum()) {
+                    readFuture.complete(new Result<>(ReturnCodes.Ledger.UNKNOWN, null));
                 } else {
-                    readFuture.completeExceptionally(new BkException("Not enough explicit responses", ReturnCodes.Ledger.LESS_THAN_ACK_QUORUM));
+                    readFuture.complete(new Result<>(ReturnCodes.Ledger.NO_QUORUM, null));
                 }
             });
 
         return readFuture;
+    }
+
+    private int minForAckQuorum(LedgerMetadata lm) {
+        return (lm.getWriteQuorum() - lm.getAckQuorum()) + 1;
     }
 
     void handleUnrecoverableErrorDuringAdd(String rc) {

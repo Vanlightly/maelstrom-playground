@@ -3,6 +3,9 @@ package com.vanlightly.bookkeeper.utils;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.vanlightly.bookkeeper.Commands;
+import com.vanlightly.bookkeeper.Constants;
+import com.vanlightly.bookkeeper.Fields;
 import com.vanlightly.bookkeeper.NodeRunner;
 import com.vanlightly.bookkeeper.network.NetworkIO;
 
@@ -71,9 +74,51 @@ public class NetworkRouter {
                             String source = msg.get("src").asText();
                             String type = msg.path("body").path("type").asText();
 
+                            boolean isReply = msg.path("body").has("in_reply_to");
                             String reqOrReply = "request";
-                            if (msg.path("body").has("in_reply_to")) {
+                            if (isReply) {
                                 reqOrReply = "reply";
+                            }
+
+                            switch (type) {
+                                case Commands.Bookie.READ_ENTRY:
+                                    if (isReply) {
+                                        type = type
+                                                + " l=" + msg.path("body").path(Fields.L.LEDGER_ID).asLong()
+                                                + " e=" + msg.path("body").path(Fields.L.ENTRY_ID).asLong()
+                                                + " lac=" + msg.path("body").path(Fields.L.LAC).asLong();
+                                    } else {
+                                        type = type
+                                                + " l=" + msg.path("body").path(Fields.L.LEDGER_ID).asLong()
+                                                + " e=" + msg.path("body").path(Fields.L.ENTRY_ID).asLong();
+                                    }
+                                    break;
+                                case Commands.Bookie.READ_LAC:
+                                    if (isReply) {
+                                        type = type
+                                                + " lac=" + msg.path("body").path(Fields.L.LAC).asLong();
+                                    } else {
+                                        type = type
+                                                + " l=" + msg.path("body").path(Fields.L.LEDGER_ID).asLong();
+                                    }
+                                    break;
+                                case Commands.Bookie.READ_LAC_LONG_POLL:
+                                    if (isReply) {
+                                        type = type
+                                                + " l=" + msg.path("body").path(Fields.L.LEDGER_ID).asLong()
+                                                + " lac=" + msg.path("body").path(Fields.L.LAC).asLong();
+                                    } else {
+                                        type = type
+                                                + " l=" + msg.path("body").path(Fields.L.LEDGER_ID).asLong()
+                                                + " plac=" + msg.path("body").path(Fields.L.PREVIOUS_LAC).asLong();
+                                    }
+                                    break;
+                                case Commands.Bookie.ADD_ENTRY:
+                                    type = type
+                                            + " l=" + msg.path("body").path(Fields.L.LEDGER_ID).asLong()
+                                            + " e=" + msg.path("body").path(Fields.L.ENTRY_ID).asLong()
+                                            + " lac=" + msg.path("body").path(Fields.L.LAC).asLong();
+                                    break;
                             }
 
                             System.out.println("(" + source + ")-[" + type + "]->(" + dest + ") " + reqOrReply);

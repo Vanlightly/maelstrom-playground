@@ -10,4 +10,5 @@ public interface MessageSender {
     void send(String destId, String command, ObjectNode body);
     CompletableFuture<JsonNode> sendRequest(String destId, String command);
     CompletableFuture<JsonNode> sendRequest(String destId, String command, ObjectNode body);
+    CompletableFuture<JsonNode> sendRequest(String destId, String command, ObjectNode body, int timeoutMs);
 }

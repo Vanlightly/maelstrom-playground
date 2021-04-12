@@ -56,6 +56,7 @@ public class PendingAddOp {
         body.put(Fields.L.LEDGER_ID, entry.getLedgerId());
         body.put(Fields.L.ENTRY_ID, entry.getEntryId());
         body.put(Fields.L.VALUE, entry.getValue());
+        body.put(Fields.L.LAC, lh.getLastAddConfirmed());
 
         String bookieId = ensemble.get(bookieIndex);
         messageSender.sendRequest(bookieId, Commands.Bookie.ADD_ENTRY, body)

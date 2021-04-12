@@ -5,6 +5,7 @@ public class Commands {
         public final static String ADD_ENTRY = "add-entry";
         public final static String READ_ENTRY = "read-entry";
         public final static String READ_LAC = "read-lac";
+        public final static String READ_LAC_LONG_POLL = "read-lac-long-poll";
         public final static String RECOVERY_READ_ENTRY = "recovery-read-entry";
         public final static String RECOVERY_ADD_ENTRY = "recovery-add-entry";
     }

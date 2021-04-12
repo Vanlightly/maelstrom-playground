@@ -27,7 +27,15 @@ public class LogWriter extends LogClient {
     }
 
     public CompletableFuture<Void> start() {
-        return createWritableLedgerHandle();
+        return createWritableLedgerHandle()
+                .thenAccept((Void v) -> {
+                    Position p = new Position(lh.getLedgerId(), -1L);
+                    cursorUpdater.accept(p, null);
+                }).whenComplete((Void v, Throwable t) -> {
+                    if (t != null) {
+                        logger.logError("Failed starting writer", t);
+                    }
+                });
     }
 
     public CompletableFuture<Void> close() {
@@ -51,6 +59,10 @@ public class LogWriter extends LogClient {
                     Op op = Op.stringToOp(entry.getValue());
                     Position pos = new Position(entry.getLedgerId(), entry.getEntryId());
                     cursorUpdater.accept(pos, op);
+                }).whenComplete((Void v, Throwable t) -> {
+                    if (t != null) {
+                        logger.logError("Failed writing value", t);
+                    }
                 });
     }
 

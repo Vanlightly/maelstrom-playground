@@ -37,6 +37,11 @@ public class LogSegmentCloser extends LogClient {
                 .thenAccept((LedgerHandle lh) -> {
                     RecoveryOp recoveryOp = new RecoveryOp(lh, future, isCancelled);
                     recoveryOp.begin();
+                })
+                .whenComplete((Void v, Throwable t) -> {
+                    if (t != null) {
+                        logger.logError("Failed closing a log segment", t);
+                    }
                 });
 
         return future;

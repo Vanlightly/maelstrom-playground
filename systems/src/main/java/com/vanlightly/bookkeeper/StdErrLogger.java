@@ -2,6 +2,10 @@ package com.vanlightly.bookkeeper;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.vanlightly.bookkeeper.Logger;
+import com.vanlightly.bookkeeper.kv.bkclient.BkException;
+
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 
 public class StdErrLogger implements Logger {
 
@@ -24,9 +28,18 @@ public class StdErrLogger implements Logger {
     }
 
     @Override
-    public void logError(String text, Throwable e) {
-        System.err.println(Thread.currentThread().getName() + " ERROR: " + text);
-        e.printStackTrace(System.err);
+    public void logError(String text, Throwable t) {
+        if (t instanceof BkException) {
+            BkException bke = (BkException)t;
+            System.err.println(Thread.currentThread().getName() + " ERROR: " + text
+                    + " Code: " + bke.getCode()
+                    + " Message: " + bke.getMessage());
+            bke.printStackTrace(System.err);
+        } else {
+            System.err.println(Thread.currentThread().getName() + " ERROR: " + text);
+            unwrap(t).printStackTrace(System.err);
+        }
+
         System.err.flush();
     }
 
@@ -48,5 +61,13 @@ public class StdErrLogger implements Logger {
         logInfo("Ignoring " + command + " command. Expected session: "
                 + realSessionId + " but received: " + msgSessionId
                 + ". Msg: " + msg.toString());
+    }
+
+    private static Throwable unwrap(Throwable t) {
+        if (t instanceof ExecutionException || t instanceof CompletionException) {
+            return unwrap(t.getCause());
+        } else {
+            return t;
+        }
     }
 }

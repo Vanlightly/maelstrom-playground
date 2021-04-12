@@ -15,7 +15,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
 
 public class KvStoreNode extends Node {
     MetadataManager metadataManager;
@@ -32,6 +31,13 @@ public class KvStoreNode extends Node {
     private Instant lastUpdatedMetadata;
     private boolean pendingLeaderResult;
 
+    /*
+        If no KV commands are being received, then NoOp ops are replicated
+        in order to advance the LAC
+     */
+    private Instant lastAppendedNoOp;
+    private Position lastPosOfNoOpCheck;
+
     public KvStoreNode(String nodeId,
                        NetworkIO net,
                        Logger logger,
@@ -41,10 +47,12 @@ public class KvStoreNode extends Node {
         this.metadataManager = builder.buildMetadataManager(sessionManager, this);
         this.ledgerManager = builder.buildLedgerManager(sessionManager, this);
         this.lastUpdatedMetadata = Instant.now().minus(1, ChronoUnit.DAYS);
-        this.kvStore = new KvStore(mapper);
-        this.opLog = new OpLog();
+        this.kvStore = new KvStore(mapper, logger);
+        this.opLog = new OpLog(logger);
         this.state = new KvStoreState(logger);
         this.cursor = new Position(-1L, -1L);
+        this.lastPosOfNoOpCheck = new Position(-1L, -1L);
+        this.lastAppendedNoOp = Instant.now().minus(1, ChronoUnit.DAYS);
         this.cachedLeaderId = new Versioned<>(Constants.Metadata.NoLeader, -1);
     }
 
@@ -64,6 +72,7 @@ public class KvStoreNode extends Node {
                 || startWriter()
                 || replicate()
                 || applyOp()
+                || appendNoOp()
                 || startReader()
                 || keepReading();
     }
@@ -128,6 +137,8 @@ public class KvStoreNode extends Node {
                         logReader.cancel();
                         logReader = null;
                     }
+
+                    truncateUncommittedOps("Leader change");
 
                     if (nodeId.equals(vLeaderId.getValue())) {
                         state.changeRole(KvStoreState.Role.LEADER);
@@ -196,7 +207,7 @@ public class KvStoreNode extends Node {
         if (leaderIs(KvStoreState.LeaderState.NEED_CATCHUP_READER)) {
             state.changeLeaderState(KvStoreState.LeaderState.CATCHUP_READING);
             logReader = newCatchupLogReader();
-            logReader.start(cursor);
+            logReader.start();
             return true;
         } else {
             return false;
@@ -227,6 +238,7 @@ public class KvStoreNode extends Node {
                                 logWriter = null;
                                 state.changeLeaderState(KvStoreState.LeaderState.NEED_WRITER);
                             } else {
+
                                 state.changeLeaderState(KvStoreState.LeaderState.READY);
                             }
                         } else {
@@ -260,17 +272,7 @@ public class KvStoreNode extends Node {
                                 }
 
                                 logger.logInfo("Replication failure, nacking all pending ops");
-
-                                // nack all pending operations
-                                List<Op> uncommitedOps = opLog.clearUncomittedOps();
-
-                                for (Op failedOp : uncommitedOps) {
-                                    ObjectNode reply = mapper.createObjectNode();
-                                    reply.put(Fields.IN_REPLY_TO, failedOp.getFields().get(Fields.MSG_ID));
-                                    reply.put("error", 1);
-                                    reply.put("text", text);
-                                    send(op.getFields().get(Fields.SOURCE), op.getFields().get(Fields.MSG_TYPE), reply);
-                                }
+                                truncateUncommittedOps(text);
 
                                 final int stateCtr2 = state.getStateCtr();
                                 logWriter.close()
@@ -299,13 +301,35 @@ public class KvStoreNode extends Node {
         }
     }
 
-    public boolean applyOp() {
+    private void truncateUncommittedOps(String reason) {
+        // nack all pending operations
+        List<Op> uncommitedOps = opLog.clearUncomittedOps();
+
+        for (Op failedOp : uncommitedOps) {
+            ObjectNode reply = mapper.createObjectNode();
+            reply.put(Fields.IN_REPLY_TO, failedOp.getFields().get(Fields.MSG_ID));
+            reply.put("error", 1);
+            reply.put("text", reason);
+            send(failedOp.getFields().get(Fields.SOURCE), failedOp.getFields().get(Fields.MSG_TYPE), reply);
+        }
+    }
+
+    private boolean applyOp() {
         if (leaderIs(KvStoreState.LeaderState.READY) && opLog.hasUnappliedOps()) {
             Op op = opLog.getNextUnappliedOp();
-            ObjectNode replyBody = kvStore.apply(op.getFields());
-            send(op.getFields().get(Fields.SOURCE),
-                    op.getFields().get(Fields.MSG_TYPE),
-                    replyBody);
+
+            if (!isNoOp(op)) {
+                ObjectNode replyBody = kvStore.apply(op.getFields());
+                send(op.getFields().get(Fields.SOURCE),
+                        op.getFields().get(Fields.MSG_TYPE),
+                        replyBody);
+            }
+            return true;
+        } else if (isFollower() && opLog.hasUnappliedOps()) {
+            Op op = opLog.getNextUnappliedOp();
+            if (!isNoOp(op)) {
+                kvStore.apply(op.getFields());
+            }
             return true;
         } else {
             return false;
@@ -316,7 +340,7 @@ public class KvStoreNode extends Node {
         if (followerIs(KvStoreState.FollowerState.NEED_READER)) {
             state.changeFollowerState(KvStoreState.FollowerState.READING);
             logReader = newLogReader();
-            logReader.start(cursor);
+            logReader.start();
             return true;
         } else {
             return false;
@@ -326,6 +350,32 @@ public class KvStoreNode extends Node {
     private boolean keepReading() {
         if (followerIs(KvStoreState.FollowerState.READING)) {
             return logReader.read();
+        } else {
+            return false;
+        }
+    }
+
+    private boolean shouldAppendNoOp() {
+        if (state.role != KvStoreState.Role.LEADER) {
+            return false;
+        }
+
+        if (cursor.equals(lastPosOfNoOpCheck)) {
+            return false;
+        }
+
+        // else if its been longer than the check interval then yes
+        return Duration.between(lastAppendedNoOp, Instant.now()).toMillis() > Constants.KvStore.MaxMsSinceLastOp;
+    }
+
+    private boolean appendNoOp() {
+        if (shouldAppendNoOp()) {
+            Map<String,String> noOpFields = new HashMap<>();
+            noOpFields.put(Fields.KV.Op.TYPE, Constants.KvStore.Ops.NOOP);
+            opLog.append(new Op(noOpFields));
+            lastPosOfNoOpCheck = new Position(cursor);
+            lastAppendedNoOp = Instant.now();
+            return true;
         } else {
             return false;
         }
@@ -347,34 +397,60 @@ public class KvStoreNode extends Node {
         return isFollower() && state.followerState == followerState;
     }
 
+    private boolean isNoOp(Op op) {
+        return op.getFields().get(Fields.KV.Op.TYPE).equals(Constants.KvStore.Ops.NOOP);
+    }
+
     @Override
     void handleRequest(JsonNode request) {
 //        logger.logDebug("Received request: " + request.toString());
+        if (mayBeRedirect(request)) {
+            return;
+        }
+
         JsonNode body = request.get(Fields.BODY);
+        JsonNode opFields = body.get(Fields.KV.OP);
         String type = body.get(Fields.MSG_TYPE).asText();
 
         Map<String, String> fields = new HashMap<>();
-        fields.put(Fields.SOURCE, body.get(Fields.SOURCE).asText());
+        fields.put(Fields.SOURCE, request.get(Fields.SOURCE).asText());
         fields.put(Fields.MSG_TYPE, body.get(Fields.MSG_TYPE).asText());
-        fields.put(Fields.KV.KEY, body.get(Fields.KV.KEY).asText());
+        fields.put(Fields.KV.Op.KEY, opFields.get(Fields.KV.Op.KEY).asText());
         Op op = new Op(fields);
 
         switch (type) {
             case Constants.KvStore.Ops.READ:
-                opLog.add(op);
+                opLog.append(op);
                 break;
             case Constants.KvStore.Ops.WRITE:
-                fields.put(Fields.KV.VALUE, body.get(Fields.KV.VALUE).asText());
-                opLog.add(op);
+                fields.put(Fields.KV.Op.VALUE, opFields.get(Fields.KV.Op.VALUE).asText());
+                opLog.append(op);
                 break;
             case Constants.KvStore.Ops.CAS:
-                fields.put(Fields.KV.FROM, body.get(Fields.KV.FROM).asText());
-                fields.put(Fields.KV.TO, body.get(Fields.KV.TO).asText());
-                opLog.add(op);
+                fields.put(Fields.KV.Op.FROM, opFields.get(Fields.KV.Op.FROM).asText());
+                fields.put(Fields.KV.Op.TO, opFields.get(Fields.KV.Op.TO).asText());
+                opLog.append(op);
                 break;
             default:
                 logger.logError("Bad message type: " + type);
         }
+    }
+
+    private boolean mayBeRedirect(JsonNode request) {
+        String type = request.get(Fields.BODY).get(Fields.MSG_TYPE).asText();
+        if (Constants.KvStore.Ops.Types.contains(type)) {
+            if (!isLeader()) {
+                if (cachedLeaderId.getValue().equals(Constants.Metadata.NoLeader)) {
+                    replyWithError(request, 11, "not a leader");
+                    return true;
+                } else {
+                    proxy(request, cachedLeaderId.getValue());
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private LogWriter newLogWriter() {
@@ -392,7 +468,8 @@ public class KvStoreNode extends Node {
                 mapper,
                 logger,
                 this,
-                (position, op) -> advancedCommittedIndex(position, op),
+                (position, op) -> appendOp(position, op),
+                () -> cursor,
                 false);
     }
 
@@ -402,7 +479,8 @@ public class KvStoreNode extends Node {
                 mapper,
                 logger,
                 this,
-                (position, op) -> advancedCommittedIndex(position, op),
+                (position, op) -> appendOp(position, op),
+                () -> cursor,
                 true);
     }
 
@@ -414,13 +492,37 @@ public class KvStoreNode extends Node {
                 this);
     }
 
+    // called by writers to advance the committed index
     private void advancedCommittedIndex(Position newPosition,
                                         Op op) {
         if (newPosition.getLedgerId() >= cursor.getLedgerId()
-                && newPosition.getEntryId() >= cursor.getEntryId()) {
+                && newPosition.getEntryId() > cursor.getEntryId()) {
             cursor = newPosition;
             opLog.committed(op);
-        } else {
+        } else if (newPosition.getLedgerId() >= cursor.getLedgerId()
+            && newPosition.getEntryId() == -1L) {
+            // opened a new ledger
+            cursor = newPosition;
+        }
+        else {
+            logger.logInfo("Tried to update the cursor with a lower position");
+        }
+    }
+
+    // called by readers to append committed ops to the op log
+    private void appendOp(Position newPosition,
+                          Op op) {
+        if (newPosition.getLedgerId() >= cursor.getLedgerId()
+                && newPosition.getEntryId() > cursor.getEntryId()) {
+            cursor = newPosition;
+            op.setCommitted(true);
+            opLog.appendCommitted(op);
+        } else if (newPosition.getLedgerId() >= cursor.getLedgerId()
+                && newPosition.getEntryId() == -1L) {
+            // opened a new ledger
+            cursor = newPosition;
+        }
+        else {
             logger.logInfo("Tried to update the cursor with a lower position");
         }
     }

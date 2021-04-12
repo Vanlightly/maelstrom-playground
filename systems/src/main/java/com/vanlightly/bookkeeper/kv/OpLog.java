@@ -1,28 +1,49 @@
 package com.vanlightly.bookkeeper.kv;
 
+import com.vanlightly.bookkeeper.Logger;
+
 import java.util.ArrayList;
 import java.util.List;
 
 public class OpLog {
+    private Logger logger;
     private List<Op> log;
     private int replicateIndex;
     private int commitIndex;
     private int appliedIndex;
 
-    public OpLog() {
+    public OpLog(Logger logger) {
+        this.logger = logger;
         log = new ArrayList<>();
         replicateIndex = -1;
         commitIndex = -1;
         appliedIndex = -1;
     }
 
-    public void add(Op op) {
+    /*
+        Used by writers to append new ops that have not yet been replicated
+     */
+    public void append(Op op) {
         log.add(op);
+    }
+
+    /*
+        Used by readers to append committed ops
+     */
+    public void appendCommitted(Op op) {
+        log.add(op);
+        commitIndex++;
+
+        if (commitIndex != log.size()-1) {
+            logger.logError("Inconsistent committed index. Is: " + commitIndex
+                + " but should be: " + (log.size()-1));
+        }
     }
 
     public void committed(Op op) {
         if (log.contains(op)) {
-            op.setCommitted(true);
+            Op currOp = log.get(log.indexOf(op));
+            currOp.setCommitted(true);
 
             for (int i = 0; i < log.size(); i++) {
                 if (log.get(i).isCommitted()) {
@@ -33,12 +54,13 @@ public class OpLog {
             }
         } else {
             // error, should not happen
+            logger.logError("Tried to commit an op that does not exist");
         }
 
     }
 
     public boolean hasUnreplicated() {
-        return replicateIndex > -1 && replicateIndex < log.size();
+        return !log.isEmpty() && replicateIndex < log.size() - 1;
     }
 
     public Op getNextUnreplicatedOp() {
@@ -47,7 +69,7 @@ public class OpLog {
     }
 
     public boolean hasUnappliedOps() {
-        return commitIndex > -1 && commitIndex > appliedIndex;
+        return commitIndex > appliedIndex;
     }
 
     public Op getNextUnappliedOp() {
