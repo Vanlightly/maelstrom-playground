@@ -6,8 +6,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vanlightly.bookkeeper.network.NetworkIO;
 import com.vanlightly.bookkeeper.network.StdInOutNetwork;
 
-import java.util.concurrent.atomic.AtomicBoolean;
-
 public class NodeRunner {
 
     public static void main(String[] args) {
@@ -37,20 +35,20 @@ public class NodeRunner {
             System.err.println("Initialization begun");
 
             while(true) {
-                node.checkForTimeouts();
-
                 boolean actionTaken = nextAction();
                 if (!actionTaken) {
                     Thread.sleep(10);
                 }
             }
         } catch(Throwable t) {
+            System.err.println("Node " + node.nodeId + " exiting due to error:");
             t.printStackTrace(System.err);
         }
     }
 
     private boolean nextAction() throws JsonProcessingException {
         return node.handleTimeout()
+                || node.resumeDelayedTask()
                 || node.roleSpecificAction()
                 || handleIncomingMsg();
     }
@@ -98,7 +96,6 @@ public class NodeRunner {
     private Node buildNode(JsonNode msg, NetworkIO net, ObjectMapper mapper) {
         String nodeId = msg.get(Fields.BODY).get("node_id").asText();
         Logger logger = new StdErrLogger();
-        AtomicBoolean isCancelled = new AtomicBoolean();
         NodeType nodeType = Node.determineType(nodeId);
 
         Node node;
@@ -107,7 +104,7 @@ public class NodeRunner {
             node = new MetadataStoreNode(String.valueOf(nodeId), net, logger, mapper, null);
             System.err.println("Built metadata store node " + nodeId);
         } else {
-            ManagerBuilder builder = new ManagerBuilderImpl(mapper, logger, isCancelled);
+            ManagerBuilder builder = new ManagerBuilderImpl(mapper, logger);
 
             if (nodeType == NodeType.KvStore) {
                 node = new KvStoreNode(nodeId, net, logger, mapper, builder);

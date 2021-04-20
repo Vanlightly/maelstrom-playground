@@ -22,7 +22,5 @@ public class ReturnCodes {
         public final static String NO_SUCH_LEDGER = "no-such-ledger";
         public final static String BAD_VERSION = "bad-version";
         public final static String BAD_SESSION = "bad-session";
-        public final static String LEADER_EXISTS = "leader-exists";
-
     }
 }

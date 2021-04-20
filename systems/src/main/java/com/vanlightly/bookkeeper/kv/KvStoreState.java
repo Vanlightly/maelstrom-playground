@@ -1,6 +1,7 @@
 package com.vanlightly.bookkeeper.kv;
 
 import com.vanlightly.bookkeeper.Logger;
+import com.vanlightly.bookkeeper.kv.log.Position;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -59,14 +60,16 @@ public class KvStoreState {
         return stateCounter.incrementAndGet();
     }
 
-    public int changeLeaderState(KvStoreState.LeaderState lState) {
-        logger.logInfo("Leader state change. From: " + leaderState + " to: " + lState);
+    public int changeLeaderState(KvStoreState.LeaderState lState, Position cursor) {
+        logger.logInfo("Leader state change. From: " + leaderState + " to: " + lState
+                + " (cursor: " + cursor + ")");
         leaderState = lState;
         return stateCounter.incrementAndGet();
     }
 
-    public int changeFollowerState(KvStoreState.FollowerState fState) {
-        logger.logInfo("Follower state change. From: " + this.followerState + " to: " + fState);
+    public int changeFollowerState(KvStoreState.FollowerState fState, Position cursor) {
+        logger.logInfo("Follower state change. From: " + this.followerState + " to: " + fState
+                + " (cursor: " + cursor + ")");
         followerState = fState;
         return stateCounter.incrementAndGet();
     }

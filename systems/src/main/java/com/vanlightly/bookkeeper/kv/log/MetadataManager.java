@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.vanlightly.bookkeeper.*;
 import com.vanlightly.bookkeeper.metadata.Versioned;
+import com.vanlightly.bookkeeper.util.Futures;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -33,7 +34,7 @@ public class MetadataManager {
 
     public CompletableFuture<Versioned<String>> getLeader() {
         CompletableFuture<Versioned<String>> future = new CompletableFuture<>();
-        FutureRetries.retryTransient(future, () -> doGetLeader());
+        Futures.retryTransient(future, isCancelled, () -> doGetLeader());
         return future;
     }
 
@@ -60,6 +61,7 @@ public class MetadataManager {
                             future.completeExceptionally(new TransientException("Operation timed out"));
                             break;
                         case ReturnCodes.Metadata.BAD_SESSION:
+                            sessionManager.clearCachedSession();
                             future.completeExceptionally(new TransientException("Session expired"));
                             break;
                         default:
@@ -72,7 +74,7 @@ public class MetadataManager {
 
     public CompletableFuture<Versioned<List<Long>>> getLedgerList() {
         CompletableFuture<Versioned<List<Long>>> future = new CompletableFuture<>();
-        FutureRetries.retryTransient(future, () -> doGetLedgerList());
+        Futures.retryTransient(future, isCancelled, () -> doGetLedgerList());
         return future;
     }
 
@@ -103,6 +105,7 @@ public class MetadataManager {
                             future.completeExceptionally(new TransientException("Operation timed out"));
                             break;
                         case ReturnCodes.Metadata.BAD_SESSION:
+                            sessionManager.clearCachedSession();
                             future.completeExceptionally(new TransientException("Session expired"));
                             break;
                         default:
@@ -115,7 +118,7 @@ public class MetadataManager {
 
     public CompletableFuture<Versioned<List<Long>>> updateLedgerList(Versioned<List<Long>> ledgerList) {
         CompletableFuture<Versioned<List<Long>>> future = new CompletableFuture<>();
-        FutureRetries.retryTransient(future, () -> doUpdateLedgerList(ledgerList));
+        Futures.retryTransient(future, isCancelled, () -> doUpdateLedgerList(ledgerList));
         return future;
     }
 
@@ -153,7 +156,11 @@ public class MetadataManager {
                             future.completeExceptionally(new TransientException("Operation timed out"));
                             break;
                         case ReturnCodes.Metadata.BAD_SESSION:
+                            sessionManager.clearCachedSession();
                             future.completeExceptionally(new TransientException("Session expired"));
+                            break;
+                        case ReturnCodes.Metadata.BAD_VERSION:
+                            future.completeExceptionally(new MetadataException("Ledger list bad version", ReturnCodes.Metadata.BAD_VERSION));
                             break;
                         default:
                             future.completeExceptionally(new MetadataException("Failed to update the ledger list", rc));

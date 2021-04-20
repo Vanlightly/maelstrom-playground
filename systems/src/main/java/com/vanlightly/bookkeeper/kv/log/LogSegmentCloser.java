@@ -2,6 +2,7 @@ package com.vanlightly.bookkeeper.kv.log;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vanlightly.bookkeeper.Logger;
+import com.vanlightly.bookkeeper.ManagerBuilder;
 import com.vanlightly.bookkeeper.MessageSender;
 import com.vanlightly.bookkeeper.kv.Op;
 import com.vanlightly.bookkeeper.kv.bkclient.LedgerHandle;
@@ -15,15 +16,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiConsumer;
 
 public class LogSegmentCloser extends LogClient {
-    private AtomicBoolean isCancelled;
 
-    public LogSegmentCloser(MetadataManager metadataManager,
-                            LedgerManager ledgerManager,
+    public LogSegmentCloser(ManagerBuilder builder,
                             ObjectMapper mapper,
                             Logger logger,
                             MessageSender messageSender) {
-        super(metadataManager, ledgerManager, mapper, logger, messageSender, null);
-        this.isCancelled = new AtomicBoolean(false);
+        super(builder, mapper, logger, messageSender, null);
     }
 
     public CompletableFuture<Void> closeSegment(Position position) {
@@ -35,7 +33,7 @@ public class LogSegmentCloser extends LogClient {
                             logger, isCancelled, vlm);
                 })
                 .thenAccept((LedgerHandle lh) -> {
-                    RecoveryOp recoveryOp = new RecoveryOp(lh, future, isCancelled);
+                    RecoveryOp recoveryOp = new RecoveryOp(logger, lh, future, isCancelled);
                     recoveryOp.begin();
                 })
                 .whenComplete((Void v, Throwable t) -> {
@@ -45,9 +43,5 @@ public class LogSegmentCloser extends LogClient {
                 });
 
         return future;
-    }
-
-    public void cancel() {
-        isCancelled.set(true);
     }
 }

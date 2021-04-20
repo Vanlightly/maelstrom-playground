@@ -52,6 +52,9 @@ public class BookieNode extends Node {
             sessionManager.handleRequest(request);
         } else {
             switch (type) {
+                case Commands.PRINT_STATE:
+                    printState();
+                    break;
                 case Commands.Bookie.ADD_ENTRY:
                     handleAddEntry(request, false);
                     break;
@@ -76,10 +79,19 @@ public class BookieNode extends Node {
         }
     }
 
+    void printState() {
+        logger.logInfo("----------- Bookie State --------------------");
+        logger.logInfo("Ledgers:");
+        for (Map.Entry<Long,Ledger> ledger : ledgers.entrySet()) {
+            logger.logInfo(ledger.getValue().toString());
+        }
+        logger.logInfo("---------------------------------------------");
+    }
+
     private boolean mayBeRedirect(JsonNode request) {
         String type = request.get(Fields.BODY).get(Fields.MSG_TYPE).asText();
         if (Constants.KvStore.Ops.Types.contains(type)) {
-            proxy(request, Node.getFirstKvStoreNodeId());
+            proxy(request, Node.getKvStoreNode());
             return true;
         } else {
             return false;
@@ -95,7 +107,7 @@ public class BookieNode extends Node {
 
         Ledger ledger = ledgers.get(ledgerId);
         if (ledger == null) {
-            ledger = new Ledger(ledgerId);
+            ledger = new Ledger(logger, ledgerId);
             ledgers.put(ledgerId, ledger);
         }
 
@@ -145,6 +157,7 @@ public class BookieNode extends Node {
         res.put(Fields.L.LEDGER_ID, ledgerId);
 
         Ledger ledger = ledgers.get(ledgerId);
+        res.put(Fields.L.ENTRY_ID, -1L);
         res.put(Fields.L.LAC, ledger.getLac());
         reply(msg, ReturnCodes.OK, res);
     }

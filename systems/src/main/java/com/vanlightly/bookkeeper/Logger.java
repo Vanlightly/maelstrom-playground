@@ -8,6 +8,6 @@ public interface Logger {
     void logError(String text);
     void logError(String text, Throwable e);
     void logBadReturnCode(String rc, String command, JsonNode msg);
-    void logStaleMsg(JsonNode msg);
+    void logReplyToTimedOutMsg(JsonNode msg);
     void logBadSession(JsonNode msg, long msgSessionId, long realSessionId);
 }

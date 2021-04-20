@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.vanlightly.bookkeeper.*;
 import com.vanlightly.bookkeeper.metadata.LedgerMetadata;
 import com.vanlightly.bookkeeper.metadata.Versioned;
+import com.vanlightly.bookkeeper.util.Futures;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -34,7 +35,7 @@ public class LedgerManager {
 
     public CompletableFuture<List<String>> getAvailableBookies() {
         CompletableFuture<List<String>> future = new CompletableFuture<>();
-        FutureRetries.retryTransient(future, () -> doGetAvailableBookies());
+        Futures.retryTransient(future, isCancelled, () -> doGetAvailableBookies());
         return future;
     }
 
@@ -63,6 +64,7 @@ public class LedgerManager {
                             future.completeExceptionally(new TransientException("Operation timed out"));
                             break;
                         case ReturnCodes.Metadata.BAD_SESSION:
+                            sessionManager.clearCachedSession();
                             future.completeExceptionally(new TransientException("Session expired"));
                             break;
                         default:
@@ -75,7 +77,7 @@ public class LedgerManager {
 
     public CompletableFuture<Versioned<LedgerMetadata>> getLedgerMetadata(long ledgerId) {
         CompletableFuture<Versioned<LedgerMetadata>> future = new CompletableFuture<>();
-        FutureRetries.retryTransient(future, () -> doGetLedgerMetadata(ledgerId));
+        Futures.retryTransient(future, isCancelled, () -> doGetLedgerMetadata(ledgerId));
         return future;
     }
 
@@ -107,6 +109,7 @@ public class LedgerManager {
                             future.completeExceptionally(new TransientException("Operation timed out"));
                             break;
                         case ReturnCodes.Metadata.BAD_SESSION:
+                            sessionManager.clearCachedSession();
                             future.completeExceptionally(new TransientException("Session expired"));
                             break;
                         default:
@@ -124,7 +127,7 @@ public class LedgerManager {
 
     public CompletableFuture<Long> getLedgerId() {
         CompletableFuture<Long> future = new CompletableFuture<>();
-        FutureRetries.retryTransient(future, () -> doGetLedgerId());
+        Futures.retryTransient(future, isCancelled, () -> doGetLedgerId());
         return future;
     }
 
@@ -150,6 +153,7 @@ public class LedgerManager {
                             future.completeExceptionally(new TransientException("Operation timed out"));
                             break;
                         case ReturnCodes.Metadata.BAD_SESSION:
+                            sessionManager.clearCachedSession();
                             future.completeExceptionally(new TransientException("Session expired"));
                             break;
                         default:
@@ -163,7 +167,7 @@ public class LedgerManager {
     public CompletableFuture<Versioned<LedgerMetadata>> createLedgerMetadata(LedgerMetadata ledgerMetadata) {
         CompletableFuture<Versioned<LedgerMetadata>> future = new CompletableFuture<>();
 
-        FutureRetries.retryTransient(future,
+        Futures.retryTransient(future, isCancelled,
                 () -> doWriteLedgerMetadata(ledgerMetadata, -1L, Commands.Metadata.LEDGER_CREATE));
 
         return future;
@@ -172,7 +176,7 @@ public class LedgerManager {
     public CompletableFuture<Versioned<LedgerMetadata>> updateLedgerMetadata(Versioned<LedgerMetadata> ledgerMetadata) {
         CompletableFuture<Versioned<LedgerMetadata>> future = new CompletableFuture<>();
 
-        FutureRetries.retryTransient(future,
+        Futures.retryTransient(future, isCancelled,
                 () -> doWriteLedgerMetadata(ledgerMetadata.getValue(), ledgerMetadata.getVersion(), Commands.Metadata.LEDGER_UPDATE));
 
         return future;
@@ -211,6 +215,7 @@ public class LedgerManager {
                             future.completeExceptionally(new TransientException("Operation timed out"));
                             break;
                         case ReturnCodes.Metadata.BAD_SESSION:
+                            sessionManager.clearCachedSession();
                             future.completeExceptionally(new TransientException("Session expired"));
                             break;
                         case ReturnCodes.Metadata.BAD_VERSION:

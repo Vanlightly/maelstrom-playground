@@ -43,9 +43,9 @@ public class KvStoreNode extends Node {
                        Logger logger,
                        ObjectMapper mapper,
                        ManagerBuilder builder) {
-        super(nodeId, false, net, logger, mapper, builder);
-        this.metadataManager = builder.buildMetadataManager(sessionManager, this);
-        this.ledgerManager = builder.buildLedgerManager(sessionManager, this);
+        super(nodeId, true, net, logger, mapper, builder);
+        this.metadataManager = builder.buildMetadataManager(this, isCancelled);
+        this.ledgerManager = builder.buildLedgerManager(this, isCancelled);
         this.lastUpdatedMetadata = Instant.now().minus(1, ChronoUnit.DAYS);
         this.kvStore = new KvStore(mapper, logger);
         this.opLog = new OpLog(logger);
@@ -70,6 +70,7 @@ public class KvStoreNode extends Node {
                 || startCatchUpReader()
                 || keepCatchingUp()
                 || startWriter()
+                || restartWriter()
                 || replicate()
                 || applyOp()
                 || appendNoOp()
@@ -142,11 +143,11 @@ public class KvStoreNode extends Node {
 
                     if (nodeId.equals(vLeaderId.getValue())) {
                         state.changeRole(KvStoreState.Role.LEADER);
-                        state.changeLeaderState(KvStoreState.LeaderState.NEED_CLOSE_SEGMENT);
+                        state.changeLeaderState(KvStoreState.LeaderState.NEED_CLOSE_SEGMENT, cursor);
                     } else {
                         // abdicate leadership
                         state.changeRole(KvStoreState.Role.FOLLOWER);
-                        state.changeFollowerState(KvStoreState.FollowerState.NEED_READER);
+                        state.changeFollowerState(KvStoreState.FollowerState.NEED_READER, cursor);
                     }
                 }
                 break;
@@ -158,7 +159,7 @@ public class KvStoreNode extends Node {
                         logReader = null;
 
                         state.changeRole(KvStoreState.Role.LEADER);
-                        state.changeLeaderState(KvStoreState.LeaderState.NEED_CLOSE_SEGMENT);
+                        state.changeLeaderState(KvStoreState.LeaderState.NEED_CLOSE_SEGMENT, cursor);
                     }
                 }
                 break;
@@ -167,10 +168,10 @@ public class KvStoreNode extends Node {
                 cachedLeaderId = vLeaderId;
                 if (cachedLeaderId.getValue().equals(nodeId)) {
                     state.changeRole(KvStoreState.Role.LEADER);
-                    state.changeLeaderState(KvStoreState.LeaderState.NEED_CATCHUP_READER);
+                    state.changeLeaderState(KvStoreState.LeaderState.NEED_CATCHUP_READER, cursor);
                 } else {
                     state.changeRole(KvStoreState.Role.FOLLOWER);
-                    state.changeFollowerState(KvStoreState.FollowerState.NEED_READER);
+                    state.changeFollowerState(KvStoreState.FollowerState.NEED_READER, cursor);
                 }
                 break;
         }
@@ -180,17 +181,17 @@ public class KvStoreNode extends Node {
 
     private boolean closeCurrentLogSegment() {
         if (leaderIs(KvStoreState.LeaderState.NEED_CLOSE_SEGMENT)) {
-            final int stateCtr = state.changeLeaderState(KvStoreState.LeaderState.CLOSING_SEGMENT);
+            final int stateCtr = state.changeLeaderState(KvStoreState.LeaderState.CLOSING_SEGMENT, cursor);
             LogSegmentCloser closer = newLogSegmentCloser();
             closer.closeSegment(cursor)
                     .whenComplete((Void v, Throwable t) -> {
                         if (state.isInState(stateCtr)) {
                             if (t != null) {
                                 logger.logError("Failed closing the current log segment. Will try again.", t);
-                                state.changeLeaderState(KvStoreState.LeaderState.NEED_CLOSE_SEGMENT);
+                                state.changeLeaderState(KvStoreState.LeaderState.NEED_CLOSE_SEGMENT, cursor);
                             } else {
                                 logger.logInfo("Log segment closed.");
-                                state.changeLeaderState(KvStoreState.LeaderState.NEED_CATCHUP_READER);
+                                state.changeLeaderState(KvStoreState.LeaderState.NEED_CATCHUP_READER, cursor);
                             }
                         } else {
                             logger.logDebug("Ignoring stale completion: LogSegmentCloser::closeSegment");
@@ -205,7 +206,7 @@ public class KvStoreNode extends Node {
 
     private boolean startCatchUpReader() {
         if (leaderIs(KvStoreState.LeaderState.NEED_CATCHUP_READER)) {
-            state.changeLeaderState(KvStoreState.LeaderState.CATCHUP_READING);
+            state.changeLeaderState(KvStoreState.LeaderState.CATCHUP_READING, cursor);
             logReader = newCatchupLogReader();
             logReader.start();
             return true;
@@ -223,23 +224,45 @@ public class KvStoreNode extends Node {
         }
     }
 
+    private boolean restartWriter() {
+        if (leaderIs(KvStoreState.LeaderState.READY) && !logWriter.isHealthy()) {
+            logger.logInfo("The current segment has been closed due to an error. A new writer will be started");
+            state.changeLeaderState(KvStoreState.LeaderState.NEED_WRITER, cursor);
+            logWriter.cancel();
+            logWriter = null;
+            return true;
+        } else {
+            return false;
+        }
+    }
+
     private boolean startWriter() {
         if ((leaderIs(KvStoreState.LeaderState.CATCHUP_READING) && logReader.hasCaughtUp())
                 || leaderIs(KvStoreState.LeaderState.NEED_WRITER)) {
-            final int stateCtr = state.changeLeaderState(KvStoreState.LeaderState.STARTING_WRITER);
+            final int stateCtr = state.changeLeaderState(KvStoreState.LeaderState.STARTING_WRITER, cursor);
 
             logWriter = newLogWriter();
             logWriter.start()
                     .whenComplete((Void v, Throwable t) -> {
                         if (state.isInState(stateCtr)) {
-                            if (t != null) {
-                                logger.logError("Writer failed to start", t);
+                            if (t == null) {
+                                state.changeLeaderState(KvStoreState.LeaderState.READY, cursor);
+                                opLog.updateIdSource();
+                            } else if (shouldAbdicate(t)) {
+                                abdicate();
+                            } else {
+                                // some other error occurred, we'll just try and start the writer again
+                                if (t instanceof BkException) {
+                                    logger.logError("Writer failed to start. Code="
+                                            + ((BkException)t).getCode() + ". Will retry.");
+                                } else {
+                                    logger.logError("Writer failed to start due to an unexpected error. Will retry.", t);
+                                }
                                 logWriter.cancel();
                                 logWriter = null;
-                                state.changeLeaderState(KvStoreState.LeaderState.NEED_WRITER);
-                            } else {
 
-                                state.changeLeaderState(KvStoreState.LeaderState.READY);
+                                delay(500).thenRun(() ->
+                                    state.changeLeaderState(KvStoreState.LeaderState.NEED_WRITER, cursor));
                             }
                         } else {
                             logger.logDebug("Ignoring stale completion: logWriter::start");
@@ -263,33 +286,15 @@ public class KvStoreNode extends Node {
                         if (t != null) {
                             // a write can only fail when there are no enough non-faulty bookies
                             if (state.isInState(stateCtr)) {
-                                state.changeLeaderState(KvStoreState.LeaderState.CLOSING_WRITER);
-
-                                String text = t.getMessage();
-                                if (t instanceof BkException) {
-                                    BkException bke = (BkException) t;
-                                    text = bke.getCode();
-                                }
-
                                 logger.logInfo("Replication failure, nacking all pending ops");
-                                truncateUncommittedOps(text);
 
-                                final int stateCtr2 = state.getStateCtr();
-                                logWriter.close()
-                                        .whenComplete((Void v2, Throwable t2) -> {
-                                            if (state.isInState(stateCtr2)) {
-                                                if (t != null) {
-                                                    logger.logError("Replication has faltered at: " + cursor + " and the close failed");
-                                                    state.changeLeaderState(KvStoreState.LeaderState.NEED_CLOSE_SEGMENT);
-                                                } else {
-                                                    logger.logInfo("Replication has faltered at: " + cursor);
-                                                    state.changeLeaderState(KvStoreState.LeaderState.NEED_WRITER);
-                                                    cursor.setEndOfLedger(true);
-                                                }
-                                            } else {
-                                                logger.logDebug("Ignoring stale completion: LogWriter::close");
-                                            }
-                                        });
+                                if (shouldAbdicate(t)) {
+                                    truncateUncommittedOps("Not leader");
+                                    abdicate();
+                                } else {
+                                    truncateUncommittedOps("Internal error");
+                                    closeDueToReplicationError();
+                                }
                             } else {
                                 logger.logDebug("Ignoring stale completion: LogWriter::write");
                             }
@@ -314,6 +319,27 @@ public class KvStoreNode extends Node {
         }
     }
 
+    private void closeDueToReplicationError() {
+        state.changeLeaderState(KvStoreState.LeaderState.CLOSING_WRITER, cursor);
+
+        final int stateCtr = state.getStateCtr();
+        logWriter.close()
+                .whenComplete((Void v, Throwable t) -> {
+                    if (state.isInState(stateCtr)) {
+                        if (t != null) {
+                            logger.logError("Replication has faltered at: " + cursor + " and the close failed");
+                            state.changeLeaderState(KvStoreState.LeaderState.NEED_CLOSE_SEGMENT, cursor);
+                        } else {
+                            logger.logInfo("Replication has faltered at: " + cursor);
+                            state.changeLeaderState(KvStoreState.LeaderState.NEED_WRITER, cursor);
+                            cursor.setEndOfLedger(true);
+                        }
+                    } else {
+                        logger.logDebug("Ignoring stale completion: LogWriter::close");
+                    }
+                });
+    }
+
     private boolean applyOp() {
         if (leaderIs(KvStoreState.LeaderState.READY) && opLog.hasUnappliedOps()) {
             Op op = opLog.getNextUnappliedOp();
@@ -321,7 +347,7 @@ public class KvStoreNode extends Node {
             if (!isNoOp(op)) {
                 ObjectNode replyBody = kvStore.apply(op.getFields());
                 send(op.getFields().get(Fields.SOURCE),
-                        op.getFields().get(Fields.MSG_TYPE),
+                        replyBody.get(Fields.MSG_TYPE).asText(),
                         replyBody);
             }
             return true;
@@ -338,9 +364,10 @@ public class KvStoreNode extends Node {
 
     private boolean startReader() {
         if (followerIs(KvStoreState.FollowerState.NEED_READER)) {
-            state.changeFollowerState(KvStoreState.FollowerState.READING);
+            state.changeFollowerState(KvStoreState.FollowerState.READING, cursor);
             logReader = newLogReader();
             logReader.start();
+            opLog.updateIdSource();
             return true;
         } else {
             return false;
@@ -360,7 +387,20 @@ public class KvStoreNode extends Node {
             return false;
         }
 
+        if (state.leaderState != KvStoreState.LeaderState.READY) {
+            return false;
+        }
+
         if (cursor.equals(lastPosOfNoOpCheck)) {
+            return false;
+        }
+
+        // if the last op is a NoOp and it isn't committed yet, then don't append
+        // another one
+        Op lastOP = opLog.getLastOp();
+        if (lastOP != null
+                && lastOP.getFields().get(Fields.KV.Op.TYPE).equals(Constants.KvStore.Ops.NOOP)
+                && lastOP.isCommitted() == false) {
             return false;
         }
 
@@ -372,7 +412,9 @@ public class KvStoreNode extends Node {
         if (shouldAppendNoOp()) {
             Map<String,String> noOpFields = new HashMap<>();
             noOpFields.put(Fields.KV.Op.TYPE, Constants.KvStore.Ops.NOOP);
-            opLog.append(new Op(noOpFields));
+            noOpFields.put(Fields.KV.Op.VALUE, nodeId);
+            opLog.appendNew(noOpFields);
+
             lastPosOfNoOpCheck = new Position(cursor);
             lastAppendedNoOp = Instant.now();
             return true;
@@ -403,37 +445,67 @@ public class KvStoreNode extends Node {
 
     @Override
     void handleRequest(JsonNode request) {
-//        logger.logDebug("Received request: " + request.toString());
         if (mayBeRedirect(request)) {
             return;
         }
 
         JsonNode body = request.get(Fields.BODY);
-        JsonNode opFields = body.get(Fields.KV.OP);
         String type = body.get(Fields.MSG_TYPE).asText();
 
-        Map<String, String> fields = new HashMap<>();
-        fields.put(Fields.SOURCE, request.get(Fields.SOURCE).asText());
-        fields.put(Fields.MSG_TYPE, body.get(Fields.MSG_TYPE).asText());
-        fields.put(Fields.KV.Op.KEY, opFields.get(Fields.KV.Op.KEY).asText());
-        Op op = new Op(fields);
+        if (sessionManager.handlesRequest(type)) {
+            sessionManager.handleRequest(request);
+        } else if (type.equals(Commands.PRINT_STATE)) {
+            printState();
+        } else {
+            JsonNode opFields = body.get(Fields.KV.OP);
 
-        switch (type) {
-            case Constants.KvStore.Ops.READ:
-                opLog.append(op);
-                break;
-            case Constants.KvStore.Ops.WRITE:
-                fields.put(Fields.KV.Op.VALUE, opFields.get(Fields.KV.Op.VALUE).asText());
-                opLog.append(op);
-                break;
-            case Constants.KvStore.Ops.CAS:
-                fields.put(Fields.KV.Op.FROM, opFields.get(Fields.KV.Op.FROM).asText());
-                fields.put(Fields.KV.Op.TO, opFields.get(Fields.KV.Op.TO).asText());
-                opLog.append(op);
-                break;
-            default:
-                logger.logError("Bad message type: " + type);
+            Map<String, String> opData = new HashMap<>();
+            opData.put(Fields.SOURCE, request.get(Fields.SOURCE).asText());
+            opData.put(Fields.MSG_TYPE, body.get(Fields.MSG_TYPE).asText());
+            opData.put(Fields.KV.Op.KEY, opFields.get(Fields.KV.Op.KEY).asText());
+
+            switch (type) {
+                case Constants.KvStore.Ops.READ:
+                    logger.logDebug("Appended READ to OpLog");
+                    opLog.appendNew(opData);
+                    break;
+                case Constants.KvStore.Ops.WRITE:
+                    logger.logDebug("Appended WRITE to OpLog");
+                    opData.put(Fields.KV.Op.VALUE, opFields.get(Fields.KV.Op.VALUE).asText());
+                    opLog.appendNew(opData);
+                    break;
+                case Constants.KvStore.Ops.CAS:
+                    logger.logDebug("Appended CAS to OpLog");
+                    opData.put(Fields.KV.Op.FROM, opFields.get(Fields.KV.Op.FROM).asText());
+                    opData.put(Fields.KV.Op.TO, opFields.get(Fields.KV.Op.TO).asText());
+                    opLog.appendNew(opData);
+                    break;
+                default:
+                    logger.logError("Bad message type: " + type);
+            }
         }
+    }
+
+    void printState() {
+        logger.logInfo("----------------- KV Store Node -------------");
+        logger.logInfo("Role: " + state.role);
+        logger.logInfo("Leader state: " + state.leaderState);
+        logger.logInfo("Follower state: " + state.followerState);
+        logger.logInfo("Cursor: " + cursor);
+        logger.logInfo("Cached leader. Version: " + cachedLeaderId.getVersion() + " Node: " + cachedLeaderId.getValue());
+
+        opLog.printState();
+        kvStore.printState();
+
+        if (logReader != null) {
+            logReader.printState();
+        }
+
+        if (logWriter != null) {
+            logWriter.printState();
+        }
+
+        logger.logInfo("---------------------------------------------");
     }
 
     private boolean mayBeRedirect(JsonNode request) {
@@ -454,8 +526,7 @@ public class KvStoreNode extends Node {
     }
 
     private LogWriter newLogWriter() {
-        return new LogWriter(metadataManager,
-                ledgerManager,
+        return new LogWriter(builder,
                 mapper,
                 logger,
                 this,
@@ -463,8 +534,7 @@ public class KvStoreNode extends Node {
     }
 
     private LogReader newLogReader() {
-        return new LogReader(metadataManager,
-                ledgerManager,
+        return new LogReader(builder,
                 mapper,
                 logger,
                 this,
@@ -474,8 +544,7 @@ public class KvStoreNode extends Node {
     }
 
     private LogReader newCatchupLogReader() {
-        return new LogReader(metadataManager,
-                ledgerManager,
+        return new LogReader(builder,
                 mapper,
                 logger,
                 this,
@@ -485,8 +554,7 @@ public class KvStoreNode extends Node {
     }
 
     private LogSegmentCloser newLogSegmentCloser() {
-        return new LogSegmentCloser(metadataManager,
-                ledgerManager,
+        return new LogSegmentCloser(builder,
                 mapper,
                 logger,
                 this);
@@ -499,10 +567,13 @@ public class KvStoreNode extends Node {
                 && newPosition.getEntryId() > cursor.getEntryId()) {
             cursor = newPosition;
             opLog.committed(op);
+            logger.logDebug("committed: " + newPosition.toString() +
+                    "\t" + Op.opToString(op));
         } else if (newPosition.getLedgerId() >= cursor.getLedgerId()
             && newPosition.getEntryId() == -1L) {
             // opened a new ledger
             cursor = newPosition;
+            logger.logDebug("advance cursor to new ledger: " + newPosition.toString());
         }
         else {
             logger.logInfo("Tried to update the cursor with a lower position");
@@ -524,6 +595,40 @@ public class KvStoreNode extends Node {
         }
         else {
             logger.logInfo("Tried to update the cursor with a lower position");
+        }
+    }
+
+    private boolean shouldAbdicate(Throwable t) {
+        if (t instanceof BkException) {
+            BkException bke = (BkException) t;
+            if (bke.getCode().equals(ReturnCodes.Metadata.BAD_VERSION)) {
+                return true;
+            }
+        } else if (t instanceof MetadataException) {
+            MetadataException me = (MetadataException) t;
+            if (me.getCode().equals(ReturnCodes.Metadata.BAD_VERSION)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void abdicate() {
+        try {
+            if (logWriter != null) {
+                logWriter.cancel();
+                logWriter = null;
+            } else if (logReader != null) {
+                logReader.cancel();
+                logReader = null;
+            }
+
+            state.changeRole(KvStoreState.Role.NONE);
+            state.changeLeaderState(KvStoreState.LeaderState.NONE, cursor);
+            checkLeadership();
+        } catch (Throwable t) {
+            logger.logError("Failed during abdication. Should not happen. TODO make this better", t);
         }
     }
 }

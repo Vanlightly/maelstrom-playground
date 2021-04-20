@@ -108,4 +108,16 @@ public class LedgerMetadata {
     public void replaceCurrentEnsemble(List<String> ensemble) {
         ensembles.put(ensembles.lastKey(), ensemble);
     }
+
+    @Override
+    public String toString() {
+        return "LedgerMetadata{" +
+                "ledgerId=" + ledgerId +
+                ", writeQuorum=" + writeQuorum +
+                ", ackQuorum=" + ackQuorum +
+                ", ensembles=" + ensembles +
+                ", lastEntryId=" + lastEntryId +
+                ", status=" + status +
+                '}';
+    }
 }

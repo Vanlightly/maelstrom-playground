@@ -29,7 +29,9 @@ public class StdErrLogger implements Logger {
 
     @Override
     public void logError(String text, Throwable t) {
-        if (t instanceof BkException) {
+        if (t == null) {
+            System.err.println(Thread.currentThread().getName() + " ERROR: " + text);
+        } else if (t instanceof BkException) {
             BkException bke = (BkException)t;
             System.err.println(Thread.currentThread().getName() + " ERROR: " + text
                     + " Code: " + bke.getCode()
@@ -50,9 +52,9 @@ public class StdErrLogger implements Logger {
     }
 
     @Override
-    public void logStaleMsg(JsonNode msg) {
+    public void logReplyToTimedOutMsg(JsonNode msg) {
         String command = msg.get(Fields.BODY).get(Fields.MSG_TYPE).asText();
-        logInfo("Ignoring " + command + " command. Either is stale or bad transition. Msg: " + msg.toString());
+        logInfo("Command " + command + " already timed out - discarding. Msg: " + msg.toString());
     }
 
     @Override

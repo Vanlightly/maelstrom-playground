@@ -4,28 +4,40 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.vanlightly.bookkeeper.network.NetworkIO;
+import com.vanlightly.bookkeeper.util.DeadlineCollection;
+import com.vanlightly.bookkeeper.util.Futures;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+/*
+    The node base class contains the logic for sending messages
+    and handling replies, as well as some auxiliary tasks such
+    as timeout handling and scheduling delayed tasks.
+
+    A node is single threaded and so things like timeouts and delays
+    are linearized with the external triggers of receiving messages.
+ */
 public abstract class Node implements MessageSender {
     public final static String MetadataNodeId = "n1";
+    public static int BookieCount = 3; // default is 3 but is configurable.
 
     protected NetworkIO net;
     protected Logger logger;
     protected SessionManager sessionManager;
+    protected ManagerBuilder builder;
     protected ObjectMapper mapper;
     protected String nodeId;
     protected int nextMsgId;
     protected AtomicBoolean isCancelled;
 
-    private NavigableMap<Long, JsonNode> pendingReplyDeadlines;
-    private Queue<JsonNode> timedOutCommands;
     private Map<Integer, CompletableFuture<JsonNode>> replyCallbacks;
+    private DeadlineCollection<JsonNode> replyDeadlines;
+    private DeadlineCollection<CompletableFuture<Void>> delayedFutures;
 
     public Node(String nodeId,
-                boolean useKeepAlives,
+                boolean includeSessionManagement,
                 NetworkIO net,
                 Logger logger,
                 ObjectMapper mapper,
@@ -35,69 +47,83 @@ public abstract class Node implements MessageSender {
         this.mapper = mapper;
         this.logger = logger;
         this.isCancelled = new AtomicBoolean();
+        this.builder = builder;
 
-        if (builder != null) {
-            if (useKeepAlives) {
-                this.sessionManager = builder.buildSessionManagerWithKeepAlives(
-                        Constants.KeepAlives.KeepAliveIntervalMs, this);
-            } else {
-                this.sessionManager = builder.buildSessionManagerWithoutKeepAlives(this);
-            }
+        // the metadata store node does not need session management
+        if (builder != null && includeSessionManagement) {
+            this.sessionManager = builder.buildSessionManager(
+                    Constants.KeepAlives.KeepAliveIntervalMs, this);
         }
 
         this.nextMsgId = 1;
-        this.pendingReplyDeadlines = new TreeMap<>();
-        this.timedOutCommands = new ArrayDeque<>();
         this.replyCallbacks = new HashMap<>();
+        this.replyDeadlines = new DeadlineCollection<>();
+        this.delayedFutures = new DeadlineCollection<>();
+
+        // set up the delay handling to use the scheduled delays of the node
+        Futures.Delay = (delayMs) -> delay(delayMs);
     }
 
     public static NodeType determineType(String nodeId) {
-        int nodeOrdinal = Integer.valueOf(nodeId.replace("n", ""));
+        int nodeOrdinal = Integer.parseInt(nodeId.replace("n", ""));
         if (nodeOrdinal == 1) {
             return NodeType.MetadataStore;
-        } else if (nodeOrdinal <= 4) {
+        } else if (nodeOrdinal <= BookieCount + 1) {
             return NodeType.Bookie;
         } else {
             return NodeType.KvStore;
         }
     }
 
-    public static String getFirstKvStoreNodeId() {
-        return "n5";
+    public static String getKvStoreNode() {
+        // 1 metadata store, BookieCount bookies, rest are KV stores
+        return "n" + BookieCount + 2;
     }
 
     public Logger getLogger() {
         return logger;
     }
 
-    public void checkForTimeouts() {
-        try {
-            SortedMap<Long, JsonNode> timedOut = pendingReplyDeadlines.headMap(System.currentTimeMillis());
-            for (Map.Entry<Long, JsonNode> timedOutMsg : timedOut.entrySet()) {
-                ObjectNode msg = mapper.createObjectNode();
+    public boolean handleTimeout() {
+        while (replyDeadlines.hasNext()) {
+            JsonNode msg = replyDeadlines.next();
+
+            int msgId = msg.get(Fields.BODY).get(Fields.MSG_ID).asInt();
+            if (replyCallbacks.containsKey(msgId)) {
+                logger.logDebug("TIMEOUT !" + msg.toString());
+                ObjectNode timeOutResponse = mapper.createObjectNode();
 
                 ObjectNode body = mapper.createObjectNode();
-                body.put(Fields.MSG_TYPE, timedOutMsg.getValue().get(Fields.BODY).get(Fields.MSG_TYPE).asText());
+                body.put(Fields.MSG_TYPE, msg.get(Fields.BODY).get(Fields.MSG_TYPE).asText());
                 body.put(Fields.RC, ReturnCodes.TIME_OUT);
+                body.put(Fields.IN_REPLY_TO, msg.get(Fields.BODY).get(Fields.MSG_ID).asText());
 
-                body.set(Fields.BODY, body);
-                msg.put("in_reply_to", timedOutMsg.getValue().get(Fields.MSG_ID).asText());
-                msg.put(Fields.SOURCE, timedOutMsg.getValue().get(Fields.DEST).asText());
-                msg.put(Fields.DEST, nodeId);
+                timeOutResponse.set(Fields.BODY, body);
+                timeOutResponse.put(Fields.SOURCE, msg.get(Fields.DEST).asText());
+                timeOutResponse.put(Fields.DEST, nodeId);
 
-                timedOutCommands.add(msg);
+                handleReply(timeOutResponse);
+                return true;
             }
-        } catch (Exception e) {
-            //logger.logError("Failed checking for timeouts", e);
         }
+
+        return false;
     }
 
-    public boolean hasTimeOuts() {
-        return !timedOutCommands.isEmpty();
+    public CompletableFuture<Void> delay(int delayMs) {
+        CompletableFuture<Void> future = new CompletableFuture<>();
+        delayedFutures.add(delayMs, future);
+        return future;
     }
 
-    public JsonNode getTimedOutMsg() {
-        return timedOutCommands.poll();
+    public boolean resumeDelayedTask() {
+        if (delayedFutures.hasNext()) {
+            CompletableFuture<Void> future = delayedFutures.next();
+            future.complete(null);
+            return true;
+        } else {
+            return false;
+        }
     }
 
     public void send(String destId, String command) {
@@ -128,11 +154,12 @@ public abstract class Node implements MessageSender {
 
     private void sendRequest(String destId,
                              String command,
-                             ObjectNode body,
+                             ObjectNode sendBody,
                              CompletableFuture<JsonNode> replyFuture,
                              int timeoutMs) {
         nextMsgId++;
 
+        ObjectNode body = sendBody.deepCopy();
         if (body == null) {
             body = mapper.createObjectNode();
         }
@@ -147,7 +174,7 @@ public abstract class Node implements MessageSender {
 
         if (replyFuture != null) {
             replyCallbacks.put(nextMsgId, replyFuture);
-            pendingReplyDeadlines.put(System.currentTimeMillis() + timeoutMs, msg);
+            replyDeadlines.add(timeoutMs, msg);
         }
 
         net.write(msg.toString());
@@ -160,7 +187,7 @@ public abstract class Node implements MessageSender {
 
     public void reply(JsonNode msg, String returnCode, JsonNode replyBody) {
         nextMsgId++;
-        ObjectNode body = (ObjectNode)replyBody;
+        ObjectNode body = replyBody.deepCopy();
 
         if (returnCode != null) {
             body.put(Fields.RC, returnCode);
@@ -200,24 +227,20 @@ public abstract class Node implements MessageSender {
         net.write(proxiedMsg.toString());
     }
 
-    public boolean handleTimeout() {
-        if (hasTimeOuts()) {
-            handleReply(getTimedOutMsg());
-            return true;
-        } else {
-            return false;
-        }
-    }
-
     public void handleReply(JsonNode reply) {
-        //logger.logDebug("Received reply: " + reply.toString());
-        int msgId = reply.get(Fields.BODY).get(Fields.IN_REPLY_TO).asInt();
-        CompletableFuture<JsonNode> replyCallback = replyCallbacks.get(msgId);
+        try {
+            int msgId = reply.get(Fields.BODY).get(Fields.IN_REPLY_TO).asInt();
+            CompletableFuture<JsonNode> replyCallback = replyCallbacks.get(msgId);
 
-        if (replyCallback != null) {
-            replyCallback.complete(reply);
-        } else {
-            logger.logStaleMsg(reply);
+            if (replyCallback != null) {
+                replyCallback.complete(reply);
+            } else {
+                logger.logReplyToTimedOutMsg(reply);
+            }
+
+            replyCallbacks.remove(msgId);
+        } catch (Throwable t) {
+            logger.logError("Failed handling reply.", t);
         }
     }
 
@@ -230,4 +253,5 @@ public abstract class Node implements MessageSender {
     abstract void initialize(JsonNode initMsg);
     abstract boolean roleSpecificAction();
     abstract void handleRequest(JsonNode request);
+    abstract void printState();
 }

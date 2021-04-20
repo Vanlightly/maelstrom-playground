@@ -43,9 +43,19 @@ public class Entry {
 
     @Override
     public String toString() {
-        return "Entry{" +
-                "ledgerId=" + ledgerId +
-                ", entryId=" + entryId +
-                '}';
+        if (value != null) {
+            return "Entry{" +
+                    "ledgerId=" + ledgerId +
+                    ", entryId=" + entryId +
+                    ", lac=" + lac +
+                    ", value=" + value +
+                    '}';
+        } else {
+            return "Entry{" +
+                    "ledgerId=" + ledgerId +
+                    ", entryId=" + entryId +
+                    ", lac=" + lac +
+                    '}';
+        }
     }
 }

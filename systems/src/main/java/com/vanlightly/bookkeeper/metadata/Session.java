@@ -42,4 +42,14 @@ public class Session {
     public long getSessionId() {
         return sessionId;
     }
+
+    @Override
+    public String toString() {
+        return "Session{" +
+                "nodeId='" + nodeId + '\'' +
+                ", renewDeadline=" + renewDeadline +
+                ", sessionId=" + sessionId +
+                ", valid=" + valid +
+                '}';
+    }
 }

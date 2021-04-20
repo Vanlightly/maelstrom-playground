@@ -1,5 +1,7 @@
 package com.vanlightly.bookkeeper.kv;
 
+import com.fasterxml.jackson.databind.exc.InvalidFormatException;
+
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -8,14 +10,21 @@ import java.util.stream.Collectors;
 
 public class Op {
 
+    private long opId;
     private Map<String,String> fields;
     private boolean committed;
 
-    public Op() {
+    public Op(long opId) {
+        this.opId = opId;
     }
 
-    public Op(Map<String, String> fields) {
+    public Op(long opId, Map<String, String> fields) {
+        this.opId = opId;
         this.fields = fields;
+    }
+
+    public long getOpId() {
+        return opId;
     }
 
     public Map<String, String> getFields() {
@@ -35,7 +44,7 @@ public class Op {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         Op op = (Op) o;
-        return Objects.equals(getFields(), op.getFields());
+        return op.opId == this.opId;
     }
 
     @Override
@@ -45,17 +54,23 @@ public class Op {
 
     public static Op stringToOp(String opStr) {
         Map<String,String> opFields = new HashMap<>();
+        String[] opParts = opStr.split("@");
+        long id = Long.parseLong(opParts[0]);
 
-        for (String keyVal : opStr.split(",")) {
-            String[] parts = keyVal.split("=");
-            opFields.put(parts[0], parts[1]);
+        for (String keyVal : opParts[1].split(",")) {
+            String[] kv = keyVal.split("=");
+            if (kv.length != 2) {
+                throw new IllegalArgumentException("Bad Op format: " + opStr);
+            } else {
+                opFields.put(kv[0], kv[1]);
+            }
         }
 
-        return new Op(opFields);
+        return new Op(id, opFields);
     }
 
     public static String opToString(Op op) {
-        return String.join(",",
+        return op.opId + "@" + String.join(",",
                 op.getFields().entrySet().stream()
                         .map(e -> e.getKey() + "=" + e.getValue())
                         .collect(Collectors.toList()));

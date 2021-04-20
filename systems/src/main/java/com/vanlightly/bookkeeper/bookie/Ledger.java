@@ -1,5 +1,7 @@
 package com.vanlightly.bookkeeper.bookie;
 
+import com.vanlightly.bookkeeper.Logger;
+
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
@@ -7,13 +9,15 @@ import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 public class Ledger {
+    Logger logger;
     long ledgerId;
     Map<Long, String> entries;
     boolean isFenced;
     long lac;
     NavigableMap<Long, List<LongPollLacRead>> lacLongPollReads;
 
-    public Ledger(long ledgerId) {
+    public Ledger(Logger logger, long ledgerId) {
+        this.logger = logger;
         this.ledgerId = ledgerId;
         this.entries = new HashMap<>();
         this.isFenced = false;
@@ -23,21 +27,23 @@ public class Ledger {
 
     public void add(Long entryId, Long lac, String value) {
         entries.put(entryId, value);
+        logger.logDebug("Adding entry=" + entryId + ", lac=" + lac + ", value=" + value);
 
         if (lac > this.lac) {
             this.lac = lac;
+        }
 
-            NavigableMap<Long, List<LongPollLacRead>> targetLpReadsMap = lacLongPollReads.headMap(lac, true);
-            for (Map.Entry<Long, List<LongPollLacRead>> lpReads : targetLpReadsMap.entrySet()) {
-                lpReads.getValue().stream().forEach((LongPollLacRead lpRead) -> {
-                    String val = read(lpRead.previousLac + 1);
-                    lpRead.getFuture().complete(new Entry(ledgerId,
-                            lpRead.previousLac + 1,
-                            this.lac,
-                            val));
-                });
-                lacLongPollReads.remove(lpReads.getKey());
-            }
+        NavigableMap<Long, List<LongPollLacRead>> completableLpReads = lacLongPollReads.headMap(lac, true);
+        for (Map.Entry<Long, List<LongPollLacRead>> lpReads : completableLpReads.entrySet()) {
+            lpReads.getValue().stream().forEach((LongPollLacRead lpRead) -> {
+                logger.logDebug("Long poll read response at entry: " + lpReads.getKey());
+                String val = read(lpRead.previousLac + 1);
+                lpRead.getFuture().complete(new Entry(ledgerId,
+                        lpRead.previousLac + 1,
+                        this.lac,
+                        val));
+            });
+            lacLongPollReads.remove(lpReads.getKey());
         }
     }
 
@@ -66,13 +72,21 @@ public class Ledger {
     }
 
     public void addLacFuture(long previousLac, int timeoutMs, CompletableFuture<Entry> future) {
-        lacLongPollReads.compute(previousLac, (Long k, List<LongPollLacRead> v) -> {
-            if (v == null) {
-                v = new ArrayList<>();
-            }
-            v.add(new LongPollLacRead(future, previousLac, timeoutMs));
-            return v;
-        });
+        if (previousLac < this.lac) {
+            String val = read(previousLac + 1);
+            future.complete(new Entry(ledgerId,
+                    previousLac + 1,
+                    this.lac,
+                    val));
+        } else {
+            lacLongPollReads.compute(previousLac, (Long k, List<LongPollLacRead> v) -> {
+                if (v == null) {
+                    v = new ArrayList<>();
+                }
+                v.add(new LongPollLacRead(future, previousLac, timeoutMs));
+                return v;
+            });
+        }
     }
 
     public boolean expireLacLongPollReads() {
@@ -96,10 +110,21 @@ public class Ledger {
                         this.lac,
                         null));
                 lacLongPollReads.get(expiredRead.getPreviousLac()).remove(expiredRead);
+                logger.logDebug("Long poll read timeout at entry: " + entryId);
             }
 
             return true;
         }
+    }
+
+    @Override
+    public String toString() {
+        return "Ledger{" +
+                "ledgerId=" + ledgerId +
+                ", entries=" + entries +
+                ", isFenced=" + isFenced +
+                ", lac=" + lac +
+                '}';
     }
 
     private static class LongPollLacRead {

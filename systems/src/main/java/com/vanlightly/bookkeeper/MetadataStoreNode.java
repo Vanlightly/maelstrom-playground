@@ -74,11 +74,14 @@ public class MetadataStoreNode extends Node {
         try {
             String type = request.get(Fields.BODY).get(Fields.MSG_TYPE).asText();
             switch (type) {
+                case Commands.PRINT_STATE:
+                    printState();
+                    break;
                 case Commands.Metadata.SESSION_NEW:
                     handleNewSession(request);
                     break;
                 case Commands.Metadata.SESSION_KEEP_ALIVE:
-                    verifySession(request);
+                    handleKeepAlive(request);
                     break;
                 case Commands.Metadata.GET_LEADER_ID:
                     handleGetLeaderId(request);
@@ -113,6 +116,24 @@ public class MetadataStoreNode extends Node {
         }
     }
 
+    void printState() {
+        logger.logInfo("----------- Metadata Store State -------------");
+        logger.logInfo("Sessions: ");
+        for (Session session : sessions.values()) {
+            logger.logInfo("\t-" + session.toString());
+        }
+
+        logger.logInfo("Leader. Version: " + leader.getVersion() + " Node: " + leader.getValue());
+        logger.logInfo("Available bookies: " + availableBookies);
+        logger.logInfo("Available clients: " + availableClients);
+        logger.logInfo("LedgerList. Version: " + ledgerList.getVersion() + " List: " + ledgerList.getValue());
+        logger.logInfo("Ledger metadata: ");
+        for (Versioned<LedgerMetadata> md : ledgers.values()) {
+            logger.logInfo("\t- Version: " + md.getVersion() + " Ledger: " + md.getValue().toString());
+        }
+        logger.logInfo("----------------------------------------------");
+    }
+
     private boolean shouldCheckSessions() {
         return Duration.between(lastCheckedSessions, Instant.now()).toMillis() > expiryCheckMs;
     }
@@ -128,14 +149,17 @@ public class MetadataStoreNode extends Node {
 
     private void checkSessions() {
         try {
-            List<String> expiredNodeIds = removeExpiredSessions();
+            List<Session> expiredSessions = removeExpiredSessions();
             removeExpired(availableBookies);
             removeExpired(availableClients);
 
             mayBeChangeLeader();
 
-            for (String nodeId : expiredNodeIds) {
-                send(nodeId, Commands.Metadata.SESSION_EXPIRED);
+            for (Session session : expiredSessions) {
+                logger.logDebug(session.getNodeId() + " session has expired!");
+                ObjectNode body = mapper.createObjectNode();
+                body.put(Fields.SESSION_ID, session.getSessionId());
+                send(session.getNodeId(), Commands.Metadata.SESSION_EXPIRED, body);
             }
         } catch (Exception e) {
             logger.logError("Failed checking for expired sessions", e);
@@ -171,14 +195,15 @@ public class MetadataStoreNode extends Node {
         }
     }
 
-    private List<String> removeExpiredSessions() {
+    private List<Session> removeExpiredSessions() {
         long now = System.nanoTime();
-        List<String> removed = new ArrayList<>();
+        List<Session> removed = new ArrayList<>();
 
-        for(String nodeId : sessions.keySet()) {
+        Set<String> nodes = new HashSet<>(sessions.keySet());
+        for(String nodeId : nodes) {
             if (sessions.get(nodeId).getRenewDeadline() < now) {
+                removed.add(sessions.get(nodeId));
                 sessions.remove(nodeId);
-                removed.add(nodeId);
             }
         }
 
@@ -186,7 +211,8 @@ public class MetadataStoreNode extends Node {
     }
 
     private void removeExpired(Set<String> nodeSet) {
-        for(String nodeId : nodeSet) {
+        Set<String> nodeSetCopy = new HashSet<>(nodeSet);
+        for(String nodeId : nodeSetCopy) {
             if (!sessions.containsKey(nodeId)) {
                 nodeSet.remove(nodeId);
             }
@@ -222,7 +248,15 @@ public class MetadataStoreNode extends Node {
     }
 
     private void replyBadSession(JsonNode msg) {
-        reply(msg, ReturnCodes.Metadata.BAD_SESSION);
+        ObjectNode body = mapper.createObjectNode();
+        body.put(Fields.SESSION_ID, msg.get(Fields.BODY).get(Fields.SESSION_ID).asText());
+        reply(msg, ReturnCodes.Metadata.BAD_SESSION, body);
+    }
+
+    private void replyKeepAliveOk(JsonNode msg) {
+        ObjectNode body = mapper.createObjectNode();
+        body.put(Fields.SESSION_ID, msg.get(Fields.BODY).get(Fields.SESSION_ID).asText());
+        reply(msg, ReturnCodes.OK, body);
     }
 
     private void replyBadVersion(JsonNode msg) {
@@ -247,6 +281,17 @@ public class MetadataStoreNode extends Node {
         ObjectNode replyBody = mapper.createObjectNode();
         replyBody.put(Fields.SESSION_ID, nextSessionId);
         reply(msg, ReturnCodes.OK, replyBody);
+    }
+
+    private void handleKeepAlive(JsonNode msg) {
+        Session session = getSession(msg);
+
+        if (session == null) {
+            replyBadSession(msg);
+        } else {
+            renewSession(session);
+            replyKeepAliveOk(msg);
+        }
     }
 
     private void handleGetLeaderId(JsonNode msg) {
@@ -403,7 +448,7 @@ public class MetadataStoreNode extends Node {
     private boolean mayBeRedirect(JsonNode request) {
         String type = request.get(Fields.BODY).get(Fields.MSG_TYPE).asText();
         if (Constants.KvStore.Ops.Types.contains(type)) {
-            proxy(request, Node.getFirstKvStoreNodeId());
+            proxy(request, Node.getKvStoreNode());
             return true;
         } else {
             return false;

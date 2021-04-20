@@ -7,44 +7,40 @@ import com.vanlightly.bookkeeper.kv.log.MetadataManager;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public interface ManagerBuilder {
-    SessionManager buildSessionManagerWithKeepAlives(Long keepAliveMs, MessageSender messageSender);
-    SessionManager buildSessionManagerWithoutKeepAlives(MessageSender messageSender);
-    LedgerManager buildLedgerManager(SessionManager sessionManager, MessageSender messageSender);
-    MetadataManager buildMetadataManager(SessionManager sessionManager, MessageSender messageSender);
+    SessionManager buildSessionManager(Long keepAliveMs,
+                                       MessageSender messageSender);
+    LedgerManager buildLedgerManager(MessageSender messageSender,
+                                     AtomicBoolean isCancelled);
+    MetadataManager buildMetadataManager(MessageSender messageSender,
+                                         AtomicBoolean isCancelled);
 }
 
 class ManagerBuilderImpl implements ManagerBuilder {
     ObjectMapper mapper;
     Logger logger;
-    AtomicBoolean isCancelled;
+    SessionManager sessionManager;
 
-    public ManagerBuilderImpl(ObjectMapper mapper, Logger logger, AtomicBoolean isCancelled) {
+    public ManagerBuilderImpl(ObjectMapper mapper, Logger logger) {
         this.mapper = mapper;
         this.logger = logger;
-        this.isCancelled = isCancelled;
     }
 
     @Override
-    public SessionManager buildSessionManagerWithKeepAlives(Long keepAliveMs, MessageSender messageSender) {
-        return new SessionManager(keepAliveMs, true,
-                mapper, messageSender, logger, isCancelled);
+    public SessionManager buildSessionManager(Long keepAliveMs,
+                                              MessageSender messageSender) {
+        sessionManager = new SessionManager(keepAliveMs, mapper, messageSender, logger);
+        return sessionManager;
     }
 
     @Override
-    public SessionManager buildSessionManagerWithoutKeepAlives(MessageSender messageSender) {
-        return new SessionManager(0L, false,
-                mapper, messageSender, logger, isCancelled);
-    }
-
-    @Override
-    public LedgerManager buildLedgerManager(SessionManager sessionManager,
-                                            MessageSender messageSender) {
+    public LedgerManager buildLedgerManager(MessageSender messageSender,
+                                            AtomicBoolean isCancelled) {
         return new LedgerManager(mapper, sessionManager, messageSender, logger, isCancelled);
     }
 
     @Override
-    public MetadataManager buildMetadataManager(SessionManager sessionManager,
-                                                MessageSender messageSender) {
+    public MetadataManager buildMetadataManager(MessageSender messageSender,
+                                                AtomicBoolean isCancelled) {
         return new MetadataManager(mapper, sessionManager, messageSender, logger, isCancelled);
     }
 };

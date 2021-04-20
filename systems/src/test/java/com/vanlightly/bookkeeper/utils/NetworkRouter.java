@@ -12,6 +12,8 @@ import com.vanlightly.bookkeeper.network.NetworkIO;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
 public class NetworkRouter {
     Map<String, TestNetworkIO> nodeNetworkIo;
@@ -20,9 +22,12 @@ public class NetworkRouter {
     ExecutorService executorService;
     AtomicBoolean isCancelled;
     ObjectMapper mapper;
+    Consumer<JsonNode> msgPrinter;
 
-    public NetworkRouter(AtomicBoolean isCancelled) {
-        this.msgQueue = new ArrayBlockingQueue<>(1000);
+    public NetworkRouter(AtomicBoolean isCancelled,
+                         Consumer<JsonNode> msgPrinter) {
+        this.msgPrinter = msgPrinter;
+        this.msgQueue = new ArrayBlockingQueue<>(10000);
         this.nodeNetworkIo = new HashMap<>();
         this.nodeRunners = new HashMap<>();
         this.isCancelled = isCancelled;
@@ -46,20 +51,35 @@ public class NetworkRouter {
         nodeRunners.put(nodeId, runnerExecutor);
     }
 
-//    public boolean waitForInitOk(int nodeCount) {
-//        int initialized = 0;
-//
-//        while (!isCancelled.get()) {
-//            if (!msgQueue.isEmpty()) {
-//                String msgStr = msgQueue.poll();
-//                if (msgStr.contains("init_ok")) {
-//                    initialized++;
-//                } else {
-//
-//                }
-//            }
-//        }
-//    }
+    public void partitionNode(String nodeId, boolean incoming, boolean outgoing) {
+        TestNetworkIO net = nodeNetworkIo.get(nodeId);
+        if (net != null) {
+            net.setLoseIncoming(incoming);
+            net.setLoseOutgoing(outgoing);
+            System.out.println("Partitioning " + nodeId + " in=" + incoming + " out=" + outgoing);
+        } else {
+            System.out.println("Cannot partition " + nodeId + " as it does not exist");
+        }
+    }
+
+    public void healNode(String nodeId) {
+        TestNetworkIO net = nodeNetworkIo.get(nodeId);
+        if (net != null) {
+            net.loseNone();
+            System.out.println("Healing " + nodeId);
+        } else {
+            System.out.println("Cannot heal " + nodeId + " as it does not exist");
+        }
+    }
+
+    public boolean isPartitioned(String nodeId) {
+        TestNetworkIO net = nodeNetworkIo.get(nodeId);
+        if (net != null) {
+            return net.losesIncoming() || net.losesOutgoing();
+        } else {
+            return false;
+        }
+    }
 
     public void routeMessages() {
         executorService.submit(() -> {
@@ -71,57 +91,8 @@ public class NetworkRouter {
                         try {
                             JsonNode msg = mapper.readTree(msgStr);
                             String dest = msg.get("dest").asText();
-                            String source = msg.get("src").asText();
-                            String type = msg.path("body").path("type").asText();
 
-                            boolean isReply = msg.path("body").has("in_reply_to");
-                            String reqOrReply = "request";
-                            if (isReply) {
-                                reqOrReply = "reply";
-                            }
-
-                            switch (type) {
-                                case Commands.Bookie.READ_ENTRY:
-                                    if (isReply) {
-                                        type = type
-                                                + " l=" + msg.path("body").path(Fields.L.LEDGER_ID).asLong()
-                                                + " e=" + msg.path("body").path(Fields.L.ENTRY_ID).asLong()
-                                                + " lac=" + msg.path("body").path(Fields.L.LAC).asLong();
-                                    } else {
-                                        type = type
-                                                + " l=" + msg.path("body").path(Fields.L.LEDGER_ID).asLong()
-                                                + " e=" + msg.path("body").path(Fields.L.ENTRY_ID).asLong();
-                                    }
-                                    break;
-                                case Commands.Bookie.READ_LAC:
-                                    if (isReply) {
-                                        type = type
-                                                + " lac=" + msg.path("body").path(Fields.L.LAC).asLong();
-                                    } else {
-                                        type = type
-                                                + " l=" + msg.path("body").path(Fields.L.LEDGER_ID).asLong();
-                                    }
-                                    break;
-                                case Commands.Bookie.READ_LAC_LONG_POLL:
-                                    if (isReply) {
-                                        type = type
-                                                + " l=" + msg.path("body").path(Fields.L.LEDGER_ID).asLong()
-                                                + " lac=" + msg.path("body").path(Fields.L.LAC).asLong();
-                                    } else {
-                                        type = type
-                                                + " l=" + msg.path("body").path(Fields.L.LEDGER_ID).asLong()
-                                                + " plac=" + msg.path("body").path(Fields.L.PREVIOUS_LAC).asLong();
-                                    }
-                                    break;
-                                case Commands.Bookie.ADD_ENTRY:
-                                    type = type
-                                            + " l=" + msg.path("body").path(Fields.L.LEDGER_ID).asLong()
-                                            + " e=" + msg.path("body").path(Fields.L.ENTRY_ID).asLong()
-                                            + " lac=" + msg.path("body").path(Fields.L.LAC).asLong();
-                                    break;
-                            }
-
-                            System.out.println("(" + source + ")-[" + type + "]->(" + dest + ") " + reqOrReply);
+                            msgPrinter.accept(msg);
 
                             if (nodeNetworkIo.containsKey(dest)) {
                                 nodeNetworkIo.get(dest).route(msgStr);

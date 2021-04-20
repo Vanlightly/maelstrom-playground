@@ -20,14 +20,12 @@ public class SessionManager implements RequestHandler {
     private ObjectMapper mapper;
     private MessageSender messageSender;
     private Logger logger;
-    private AtomicBoolean isCancelled;
 
-    private boolean sendExplicitKeepAlives;
     private long keepAliveMs;
     private Instant lastSentKeepAlive;
     private AtomicLong sessionId;
     private AtomicBoolean pendingSessionId;
-//    private ScheduledExecutorService keepAliveExecutor;
+    private AtomicBoolean pendingKeepAlive;
     private List<CompletableFuture<Long>> sessionFutures;
 
     private static Set<String> requestsHandled = new HashSet<>(
@@ -35,19 +33,16 @@ public class SessionManager implements RequestHandler {
     );
 
     public SessionManager(Long keepAliveMs,
-                          boolean sendExplicitKeepAlives,
                           ObjectMapper mapper,
                           MessageSender messageSender,
-                          Logger logger,
-                          AtomicBoolean isCancelled) {
+                          Logger logger) {
         this.keepAliveMs = keepAliveMs;
-        this.sendExplicitKeepAlives = sendExplicitKeepAlives;
         this.mapper = mapper;
         this.messageSender = messageSender;
         this.logger = logger;
-        this.isCancelled = isCancelled;
 
         this.pendingSessionId = new AtomicBoolean();
+        this.pendingKeepAlive = new AtomicBoolean();
         this.sessionId = new AtomicLong(-1L);
         this.sessionFutures = new ArrayList<>();
         this.lastSentKeepAlive = Instant.now().minus(1, ChronoUnit.DAYS);
@@ -55,16 +50,34 @@ public class SessionManager implements RequestHandler {
 
     public boolean shouldMaintainSession() {
         return (sessionId.get() == -1L && !pendingSessionId.get())
-                || (sendExplicitKeepAlives && Duration.between(lastSentKeepAlive, Instant.now()).toMillis() > keepAliveMs);
+                || (Duration.between(lastSentKeepAlive, Instant.now()).toMillis() > keepAliveMs
+                    && !pendingKeepAlive.get());
     }
 
     public boolean maintainSession() {
         if (shouldMaintainSession()) {
             if (sessionId.get() > -1) {
-                if (sendExplicitKeepAlives) {
+                if (!pendingKeepAlive.get()) {
+                    pendingKeepAlive.set(true);
                     ObjectNode ka = mapper.createObjectNode();
                     ka.put(Fields.SESSION_ID, sessionId.get());
-                    messageSender.send(Node.MetadataNodeId, Commands.Metadata.SESSION_KEEP_ALIVE, ka);
+                    messageSender.sendRequest(Node.MetadataNodeId, Commands.Metadata.SESSION_KEEP_ALIVE,
+                            ka, (int)Constants.KeepAlives.KeepAliveIntervalMs*3)
+                        .thenAccept((JsonNode msg) -> {
+                            String rc = msg.get(Fields.BODY).get(Fields.RC).asText();
+                            if (rc.equals(ReturnCodes.Metadata.BAD_SESSION) &&
+                                msg.get(Fields.BODY).get(Fields.SESSION_ID).asLong() >= sessionId.get()) {
+                                logger.logDebug("Bad session. Initiating new session");
+                                obtainNewSession();
+                            }
+                            // timeouts and ok return codes can be ignored
+                        })
+                        .whenComplete((Void v, Throwable t) -> {
+                            if (t != null) {
+                                logger.logError("Keep alive failed", t);
+                            }
+                            pendingKeepAlive.set(false);
+                        });
                     lastSentKeepAlive = Instant.now();
                 }
             } else if (!pendingSessionId.get()) {
@@ -74,6 +87,11 @@ public class SessionManager implements RequestHandler {
         } else {
             return false;
         }
+    }
+
+    public void clearCachedSession() {
+        logger.logDebug("Received bad session response, clearing cached session id");
+        sessionId.set(-1L);
     }
 
     public CompletableFuture<Long> getSessionId() {
@@ -104,10 +122,18 @@ public class SessionManager implements RequestHandler {
     }
 
     private void obtainNewSession() {
-        lastSentKeepAlive = Instant.now();
         pendingSessionId.set(true);
+        lastSentKeepAlive = Instant.now();
+        logger.logDebug("Obtaining a new session. Curr: " + sessionId.get());
         messageSender.sendRequest(Node.MetadataNodeId, Commands.Metadata.SESSION_NEW)
-            .thenAccept((JsonNode reply) -> updateSession(reply));
+            .thenAccept((JsonNode reply) -> updateSession(reply))
+            .whenComplete((Void v, Throwable t) -> {
+                if (t != null) {
+                    logger.logError("Failed obtaining a new session", t);
+                    sessionId.set(-1L);
+                    pendingSessionId.set(false);
+                }
+            });
     }
 
     private void updateSession(JsonNode msg) {
@@ -116,6 +142,7 @@ public class SessionManager implements RequestHandler {
 
         if (rc.equals(ReturnCodes.OK)) {
             long newSessionId = body.get(Fields.SESSION_ID).asLong();
+            logger.logDebug("Obtained new session: " + newSessionId);
             if (newSessionId > sessionId.get()) {
                 sessionId.set(newSessionId);
 
@@ -128,6 +155,7 @@ public class SessionManager implements RequestHandler {
                 logger.logBadSession(msg, newSessionId, sessionId.get());
             }
         } else {
+            logger.logDebug("Could not establish new session. Code: " + rc);
             sessionId.set(-1L);
         }
 
@@ -154,6 +182,7 @@ public class SessionManager implements RequestHandler {
 
     private void handleExpiredSession(JsonNode request) {
         if (matchesCurrentSession(request)) {
+            logger.logDebug("Received session expired notification");
             sessionId.set(-1L);
         }
     }

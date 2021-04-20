@@ -7,6 +7,7 @@ import com.vanlightly.bookkeeper.*;
 import com.vanlightly.bookkeeper.metadata.LedgerMetadata;
 import com.vanlightly.bookkeeper.metadata.LedgerStatus;
 import com.vanlightly.bookkeeper.metadata.Versioned;
+import com.vanlightly.bookkeeper.util.Futures;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -44,10 +45,26 @@ public class LedgerHandle {
         this.versionedMetadata = versionedMetadata;
         this.pendingAddOps = new ArrayDeque<>();
         this.pendingAddsSequenceHead = -1L;
-        this.lastAddConfirmed = -1L;
-        this.lastAddPushed = -1L;
+
+        if (versionedMetadata.getValue().getStatus() == LedgerStatus.CLOSED) {
+            this.lastAddConfirmed = this.lastAddPushed = versionedMetadata.getValue().getLastEntryId();
+        } else {
+            this.lastAddConfirmed = -1L;
+            this.lastAddPushed = -1L;
+        }
         this.delayedWriteFailedBookies = new HashMap<>();
         this.closeFutures = new ArrayList<>();
+    }
+
+    public void printState() {
+        logger.logInfo("------------ Ledger Handle State -------------");
+        logger.logInfo("Ledger metadata version: " + versionedMetadata.getVersion());
+        logger.logInfo("Ledger metadata: " + versionedMetadata.getValue());
+        logger.logInfo("pendingAddsSequenceHead: "+ pendingAddsSequenceHead);
+        logger.logInfo("lastAddPushed: "+ lastAddPushed);
+        logger.logInfo("lastAddConfirmed: "+ lastAddConfirmed);
+        logger.logInfo("changingEnsemble: "+ changingEnsemble);
+        logger.logInfo("----------------------------------------------");
     }
 
     public Versioned<LedgerMetadata> getCachedLedgerMetadata() {
@@ -85,12 +102,14 @@ public class LedgerHandle {
         Entry entry = new Entry(versionedMetadata.getValue().getLedgerId(), lastAddPushed, value);
         PendingAddOp addOp = new PendingAddOp(mapper,
                 messageSender,
+                logger,
                 entry,
                 versionedMetadata.getValue().getCurrentEnsemble(),
                 versionedMetadata.getValue().getWriteQuorum(),
                 versionedMetadata.getValue().getAckQuorum(),
                 this,
-                future);
+                future,
+                isCancelled);
 
         addOp.begin();
         pendingAddOps.add(addOp);
@@ -99,11 +118,11 @@ public class LedgerHandle {
     }
 
     public CompletableFuture<Result<Entry>> read(long entryId) {
-        return doRead(entryId, 0, false, 0);
+        return sequentialRead(entryId, 0, false, 0);
     }
 
     public CompletableFuture<Result<Entry>> recoveryRead(long entryId) {
-        return doRead(entryId, 0, true, 0);
+        return sequentialRead(entryId, 0, true, 0);
     }
 
     /*
@@ -111,10 +130,10 @@ public class LedgerHandle {
         sequentially tries the next bookie until either a success response or there are no
         more bookies left to try
      */
-    private CompletableFuture<Result<Entry>> doRead(long entryId,
-                                                    int bookieIndex,
-                                                    boolean isRecoveryRead,
-                                                    final int unknown) {
+    private CompletableFuture<Result<Entry>> sequentialRead(long entryId,
+                                                            int bookieIndex,
+                                                            boolean isRecoveryRead,
+                                                            final int unknown) {
         ObjectNode readReq = mapper.createObjectNode();
         readReq.put(Fields.L.LEDGER_ID, versionedMetadata.getValue().getLedgerId());
         readReq.put(Fields.L.ENTRY_ID, entryId);
@@ -123,41 +142,42 @@ public class LedgerHandle {
         String bookieId = versionedMetadata.getValue().getCurrentEnsemble().get(bookieIndex);
 
         return messageSender.sendRequest(bookieId, Commands.Bookie.READ_ENTRY, readReq)
-            .thenCompose((JsonNode reply) -> {
-                JsonNode body = reply.get(Fields.BODY);
-                String code = body.get(Fields.RC).asText();
-                if (code.equals(ReturnCodes.OK)) {
-                        long lac = body.get(Fields.L.LAC).asLong();
+                .thenApply(this::checkForCancellation)
+                .thenCompose((JsonNode reply) -> {
+                    JsonNode body = reply.get(Fields.BODY);
+                    String code = body.get(Fields.RC).asText();
+                    if (code.equals(ReturnCodes.OK)) {
+                            long lac = body.get(Fields.L.LAC).asLong();
 
-                        if (!isRecoveryRead) {
-                            this.updateLac(lac);
-                        }
+                            if (!isRecoveryRead) {
+                                this.updateLac(lac);
+                            }
 
-                        Entry entry = new Entry(
-                                body.get(Fields.L.LEDGER_ID).asLong(),
-                                body.get(Fields.L.ENTRY_ID).asLong(),
-                                body.get(Fields.L.LAC).asLong(),
-                                body.get(Fields.L.VALUE).asText());
-                        return CompletableFuture.completedFuture(new Result<>(ReturnCodes.OK, entry));
-                } else {
-                    int unknown1 = unknown;
-                    if (!code.equals(ReturnCodes.Bookie.NO_SUCH_ENTRY)
-                            && !code.equals(ReturnCodes.Bookie.NO_SUCH_LEDGER)) {
-                        unknown1++;
-                    }
-
-                    int nextBookieIndex = bookieIndex + 1;
-                    if (nextBookieIndex >= versionedMetadata.getValue().getWriteQuorum()) {
-                        if (unknown1 >= 0) {
-                            return CompletableFuture.completedFuture(new Result<>(ReturnCodes.Ledger.UNKNOWN, null));
-                        } else {
-                            return CompletableFuture.completedFuture(new Result<>(code, null));
-                        }
+                            Entry entry = new Entry(
+                                    body.get(Fields.L.LEDGER_ID).asLong(),
+                                    body.get(Fields.L.ENTRY_ID).asLong(),
+                                    body.get(Fields.L.LAC).asLong(),
+                                    body.get(Fields.L.VALUE).asText());
+                            return CompletableFuture.completedFuture(new Result<>(ReturnCodes.OK, entry));
                     } else {
-                        return doRead(entryId, nextBookieIndex, isRecoveryRead, unknown1);
+                        int unknown1 = unknown;
+                        if (!code.equals(ReturnCodes.Bookie.NO_SUCH_ENTRY)
+                                && !code.equals(ReturnCodes.Bookie.NO_SUCH_LEDGER)) {
+                            unknown1++;
+                        }
+
+                        int nextBookieIndex = bookieIndex + 1;
+                        if (nextBookieIndex >= versionedMetadata.getValue().getWriteQuorum()) {
+                            if (unknown1 >= 0) {
+                                return CompletableFuture.completedFuture(new Result<>(ReturnCodes.Ledger.UNKNOWN, null));
+                            } else {
+                                return CompletableFuture.completedFuture(new Result<>(code, null));
+                            }
+                        } else {
+                            return sequentialRead(entryId, nextBookieIndex, isRecoveryRead, unknown1);
+                        }
                     }
-                }
-            });
+                });
     }
 
     public CompletableFuture<Result<Entry>> readLac() {
@@ -179,9 +199,11 @@ public class LedgerHandle {
         ObjectNode readReq = mapper.createObjectNode();
         readReq.put(Fields.L.LEDGER_ID, versionedMetadata.getValue().getLedgerId());
 
+        int msgTimeout = Constants.Timeouts.TimeoutMs;
         if (readCommand.equals(Commands.Bookie.READ_LAC_LONG_POLL)) {
             readReq.put(Fields.L.PREVIOUS_LAC, entryId);
             readReq.put(Fields.L.LONG_POLL_TIMEOUT_MS, Constants.KvStore.LongPollTimeoutMs);
+            msgTimeout = Constants.KvStore.LongPollResponseTimeoutMs;
         } else {
             readReq.put(Fields.L.ENTRY_ID, entryId);
         }
@@ -193,8 +215,8 @@ public class LedgerHandle {
         for (int b=0; b<writeQuorum; b++) {
             String bookieId = bookies.get(b);
             CompletableFuture<Result<Entry>> future =
-                    messageSender.sendRequest(bookieId, readCommand, readReq,
-                            Constants.KvStore.LongPollTimeoutMs*3)
+                messageSender.sendRequest(bookieId, readCommand, readReq, msgTimeout)
+                    .thenApply(this::checkForCancellation)
                     .thenApply((JsonNode reply) -> {
                         JsonNode body = reply.get(Fields.BODY);
                         String code = body.get(Fields.RC).asText();
@@ -304,8 +326,17 @@ public class LedgerHandle {
         versionedMetadata.getValue().setStatus(LedgerStatus.CLOSED);
         versionedMetadata.getValue().setLastEntryId(lastAddConfirmed);
         errorOutPendingAdds(rc);
+
         return ledgerManager.updateLedgerMetadata(versionedMetadata)
+                .thenApply(this::checkForCancellation)
                 .whenComplete((Versioned<LedgerMetadata> vlm, Throwable t) -> {
+                    if (t != null) {
+                        logger.logDebug("Ledger Close failed: " + t);
+                    } else {
+                        logger.logDebug("Ledger Close completed");
+                    }
+
+
                     for (CompletableFuture<Versioned<LedgerMetadata>> future : closeFutures) {
                         if (t != null) {
                             future.completeExceptionally(t);
@@ -330,6 +361,7 @@ public class LedgerHandle {
     }
 
     private void errorOutPendingAdds(String rc, List<PendingAddOp> ops) {
+        logger.logDebug("Erroring " + ops.size() + " pending adds with code: " + rc);
         for (PendingAddOp op : ops) {
             op.completeCallerFuture(rc);
         }
@@ -352,93 +384,102 @@ public class LedgerHandle {
     }
 
     void handleBookieFailure(Map<Integer, String> failedBookies) {
-        if (changingEnsemble) {
-            delayedWriteFailedBookies.putAll(failedBookies);
-        } else {
-            changeEnsemble(failedBookies);
+        // the failed bookie may relate to a committed entry that no longer
+        // has a PendingAddOp and the bookie may already have been replaced by
+        // a prior ensemble change. We need to filter those out.
+        Map<Integer, String> ofCurrentEnsemble = new HashMap<>();
+        for (Map.Entry<Integer, String> b : failedBookies.entrySet()) {
+            if (versionedMetadata.getValue().getCurrentEnsemble().contains(b.getValue())) {
+                ofCurrentEnsemble.put(b.getKey(), b.getValue());
+            }
+        }
+
+        if (!ofCurrentEnsemble.isEmpty()) {
+            if (changingEnsemble) {
+                delayedWriteFailedBookies.putAll(ofCurrentEnsemble);
+            } else {
+                changeEnsemble(ofCurrentEnsemble);
+            }
         }
     }
 
-    private CompletableFuture<Void> changeEnsemble(Map<Integer, String> failedBookies) {
-        CompletableFuture<Void> future = new CompletableFuture<>();
-
+    private void changeEnsemble(Map<Integer, String> failedBookies) {
+        logger.logDebug("Changing the ensemble due to failure in bookies: " + failedBookies);
         changingEnsemble = true;
 
         // work on a copy and replace it at the end
-        Versioned<LedgerMetadata> cachedMetadata = new Versioned<>(
+        Versioned<LedgerMetadata> copyOfMetadata = new Versioned<>(
                 new LedgerMetadata(versionedMetadata.getValue()), versionedMetadata.getVersion());
 
-        if (cachedMetadata.getValue().getStatus() == LedgerStatus.CLOSED) {
-            future.complete(null);
+        if (copyOfMetadata.getValue().getStatus() == LedgerStatus.CLOSED) {
+            logger.logDebug("Ensemble changed cancelled - ledger already closed");
+            return;
         } else {
             Map<Integer, String> bookiesToReplace = new HashMap<>(delayedWriteFailedBookies);
             bookiesToReplace.putAll(failedBookies);
+            delayedWriteFailedBookies.clear();
 
-            List<String> newEnsemble = new ArrayList<>(cachedMetadata.getValue().getCurrentEnsemble());
             ledgerManager.getAvailableBookies()
-                .whenComplete((List<String> availableBookies, Throwable bookiesThrowable) -> {
-                    if (bookiesThrowable != null) {
-                        // handle
+                .thenApply(this::checkForCancellation)
+                .thenCompose((List<String> availableBookies) -> {
+                    logger.logDebug("Available bookies: " + availableBookies.size());
+                    availableBookies.removeAll(copyOfMetadata.getValue().getCurrentEnsemble());
+                    if (availableBookies.size() < bookiesToReplace.size()) {
+                        logger.logError("Couldn't add a new ensemble, not enough bookies");
+                        return closeInternal(ReturnCodes.Bookie.NOT_ENOUGH_BOOKIES);
                     } else {
-                        availableBookies.removeAll(newEnsemble);
-                        if (availableBookies.size() < bookiesToReplace.size()) {
-                            logger.logError("Couldn't add a new ensemble, not enough bookies");
-                            closeInternal(ReturnCodes.Bookie.NOT_ENOUGH_BOOKIES)
-                                    .whenComplete((Versioned<LedgerMetadata> md, Throwable closeThrowable) ->
-                                    {
-                                        if (closeThrowable != null) {
-                                            logger.logError("Failed closing the ledger", closeThrowable);
-                                        }
-                                        changingEnsemble = false;
-                                        future.complete(null);
-                                        // TODO what state should this be left in?
-                                    });
-                        } else {
-                            Collections.shuffle(availableBookies);
-                            Set<Integer> replacedBookieIndices = new HashSet<>();
+                        logger.logDebug("Enough available bookies");
+                        Collections.shuffle(availableBookies);
+                        Set<Integer> replacedBookieIndices = new HashSet<>();
 
-                            for (int bookieIndex : bookiesToReplace.keySet()) {
-                                String newBookie = availableBookies.get(0);
-                                newEnsemble.set(bookieIndex, newBookie);
-                                replacedBookieIndices.add(bookieIndex);
-                            }
-
-                            cachedMetadata.getValue().replaceCurrentEnsemble(newEnsemble);
-
-                            ledgerManager.updateLedgerMetadata(cachedMetadata)
-                                    .whenComplete((Versioned<LedgerMetadata> md, Throwable updateThrowable) ->
-                                    {
-                                        if (updateThrowable != null) {
-                                            // handle
-                                            if (updateThrowable.getCause() instanceof MetadataException) {
-                                                MetadataException me = (MetadataException)updateThrowable.getCause();
-
-                                                if (me.getCode().equals(ReturnCodes.Metadata.BAD_VERSION)) {
-                                                    // another process has updated the ledger metadata, so our copy is now stale
-                                                    errorOutPendingAdds(ReturnCodes.Metadata.BAD_VERSION);
-                                                    changingEnsemble = false;
-                                                }
-                                            } else {
-                                                // TODO
-                                            }
-                                        } else {
-                                            versionedMetadata = md;
-                                            unsetSuccessAndSendWriteRequest(newEnsemble, replacedBookieIndices);
-
-                                            for (Integer replacedBookie : replacedBookieIndices) {
-                                                delayedWriteFailedBookies.remove(replacedBookie);
-                                            }
-                                        }
-                                        changingEnsemble = false;
-
-                                        future.complete(null);
-                                    });
+                        List<String> newEnsemble = new ArrayList<>(copyOfMetadata.getValue().getCurrentEnsemble());
+                        for (int bookieIndex : bookiesToReplace.keySet()) {
+                            String newBookie = availableBookies.get(0);
+                            newEnsemble.set(bookieIndex, newBookie);
+                            replacedBookieIndices.add(bookieIndex);
                         }
+
+                        copyOfMetadata.getValue().replaceCurrentEnsemble(newEnsemble);
+
+                        logger.logDebug("Updating metadata with new ensemble");
+                        return ledgerManager.updateLedgerMetadata(copyOfMetadata)
+                                .thenApply((Versioned<LedgerMetadata> vlm) -> {
+                                    logger.logDebug("Metadata updated with new ensemble. From: "
+                                            + versionedMetadata.getValue().getCurrentEnsemble()
+                                            + " to: " + vlm.getValue().getCurrentEnsemble());
+                                    versionedMetadata = vlm;
+                                    unsetSuccessAndSendWriteRequest(newEnsemble, replacedBookieIndices);
+
+                                    return versionedMetadata;
+                                });
+                    }
+                })
+                .whenComplete((Versioned<LedgerMetadata> vlm, Throwable t) -> {
+                    changingEnsemble = false;
+
+                    if (t != null) {
+                        ensembleChangeFailed(t);
+                    } else if (!delayedWriteFailedBookies.isEmpty()) {
+                        logger.logInfo("More failed bookies during last ensemble change. Triggered new ensemble change.");
+                        changeEnsemble(delayedWriteFailedBookies);
+                    } else {
+                        logger.logDebug("Ensemble change complete");
                     }
                 });
         }
+    }
 
-        return future;
+    private void ensembleChangeFailed(Throwable t) {
+        if (Futures.unwrap(t) instanceof MetadataException) {
+            MetadataException me = (MetadataException) Futures.unwrap(t);
+            errorOutPendingAdds(me.getCode());
+            logger.logError("The ensemble change has failed due to a metadata error", t);
+        } else if (Futures.unwrap(t) instanceof OperationCancelledException) {
+            logger.logInfo("The ensemble change has been cancelled");
+        } else {
+            errorOutPendingAdds(ReturnCodes.UNEXPECTED_ERROR);
+            logger.logError("The ensemble change has failed due to an unexpected error", t);
+        }
     }
 
     void unsetSuccessAndSendWriteRequest(List<String> ensemble, final Set<Integer> replacedBookieIndices) {
@@ -447,5 +488,13 @@ public class LedgerHandle {
                 pendingAddOp.unsetSuccessAndSendWriteRequest(ensemble, bookieIndex);
             }
         }
+    }
+
+    private <T> T checkForCancellation(T t) {
+        if (isCancelled.get()) {
+            throw new OperationCancelledException();
+        }
+
+        return t;
     }
 }

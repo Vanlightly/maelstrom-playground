@@ -25,41 +25,45 @@ public class KvStore {
     public ObjectNode apply(Map<String, String> op) {
         ObjectNode body = mapper.createObjectNode();
 
-        String key = op.get("key");
-        switch (op.get("type")) {
+        String key = op.get(Fields.KV.Op.KEY);
+        String type = op.get(Fields.KV.Op.TYPE);
+        body.put(Fields.KV.Op.CMD_TYPE, type);
+
+        switch (type) {
             case Constants.KvStore.Ops.WRITE:
-                store.put(key, op.get("value"));
-                body.put("type", "write_ok");
+                store.put(key, op.get(Fields.KV.Op.VALUE));
+                body.put(Fields.KV.Op.TYPE, "write_ok");
                 break;
             case Constants.KvStore.Ops.READ:
                 if (store.containsKey(key)) {
-                    body.put("type", "read_ok");
-                    body.put("value", store.get(key));
+                    body.put(Fields.KV.Op.TYPE, "read_ok");
+                    body.put(Fields.KV.Op.VALUE, store.get(key));
                 } else {
-                    body.put("type", "error");
-                    body.put("code", 20);
-                    body.put("text", "not found");
+                    body.put(Fields.KV.Op.TYPE, "error");
+                    body.put(Fields.KV.Op.CODE, 20);
+                    body.put(Fields.KV.Op.ERROR_TEXT, "not found");
                 }
                 break;
             case Constants.KvStore.Ops.CAS:
                 if (store.containsKey(key)) {
                     String currVal = store.get(key);
-                    String fromVal = op.get("from");
-                    String toVal = op.get("to");
+                    String fromVal = op.get(Fields.KV.Op.FROM);
+                    String toVal = op.get(Fields.KV.Op.TO);
 
                     if (currVal.equals(fromVal)) {
-                        body.put("type", "cas_ok");
+                        body.put(Fields.KV.Op.TYPE, "cas_ok");
                         store.put(key, toVal);
                     } else {
-                        body.put("type", "error");
-                        body.put("code", 22);
-                        body.put("text", "expected " + fromVal + " but had " + currVal);
+                        body.put(Fields.KV.Op.TYPE, "error");
+                        body.put(Fields.KV.Op.CODE, 22);
+                        body.put(Fields.KV.Op.ERROR_TEXT, "expected " + fromVal + " but had " + currVal);
                     }
                 } else {
-                    body.put("type", "error");
-                    body.put("code", 20);
-                    body.put("text", "not found");
+                    body.put(Fields.KV.Op.TYPE, "error");
+                    body.put(Fields.KV.Op.CODE, 20);
+                    body.put(Fields.KV.Op.ERROR_TEXT, "not found");
                 }
+                break;
             default:
                 throw new RuntimeException("Operation not supported");
         }
@@ -69,5 +73,10 @@ public class KvStore {
         return body;
     }
 
+    public void printState() {
+        logger.logInfo("----------------- KV State -------------");
+        logger.logDebug(store.toString());
+        logger.logInfo("----------------------------------------");
+    }
 
 }

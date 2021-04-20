@@ -1,6 +1,8 @@
 package com.vanlightly.bookkeeper;
 
 public class Commands {
+    public final static String PRINT_STATE = "print-state";
+
     public static class Bookie {
         public final static String ADD_ENTRY = "add-entry";
         public final static String READ_ENTRY = "read-entry";
@@ -32,5 +34,11 @@ public class Commands {
     public static class Client {
         public final static String WRITE = "write";
         public final static String READ = "read";
+        public final static String CAS = "cas";
+
+        public final static String WRITE_OK = "write_ok";
+        public final static String READ_OK = "read_ok";
+        public final static String CAS_OK = "cas_ok";
+        public final static String ERROR = "error";
     }
 }

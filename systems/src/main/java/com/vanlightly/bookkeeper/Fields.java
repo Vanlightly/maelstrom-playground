@@ -40,6 +40,9 @@ public class Fields {
             public final static String VALUE = "value";
             public final static String FROM = "from";
             public final static String TO = "to";
+            public final static String CODE = "code";
+            public final static String ERROR_TEXT = "text";
+            public final static String CMD_TYPE = "cmd-type";
         }
 
     }

@@ -3,18 +3,16 @@ package com.vanlightly.bookkeeper.kv.bkclient;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.vanlightly.bookkeeper.Commands;
-import com.vanlightly.bookkeeper.Fields;
-import com.vanlightly.bookkeeper.MessageSender;
-import com.vanlightly.bookkeeper.ReturnCodes;
+import com.vanlightly.bookkeeper.*;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class PendingAddOp {
     ObjectMapper mapper;
+    Logger logger;
     Entry entry;
-    int pendingAdds;
     Set<Integer> successAdds;
     List<String> ensemble;
     int writeQuorum;
@@ -23,26 +21,30 @@ public class PendingAddOp {
     MessageSender messageSender;
     LedgerHandle lh;
     CompletableFuture<Entry> callerFuture;
+    AtomicBoolean isCancelled;
     boolean aborted;
 
     public PendingAddOp(ObjectMapper mapper,
                         MessageSender messageSender,
+                        Logger logger,
                         Entry entry,
                         List<String> ensemble,
                         int writeQuorum,
                         int ackQuorum,
                         LedgerHandle lh,
-                        CompletableFuture<Entry> callerFuture) {
+                        CompletableFuture<Entry> callerFuture,
+                        AtomicBoolean isCancelled) {
         this.mapper = mapper;
         this.messageSender = messageSender;
+        this.logger = logger;
         this.entry = entry;
         this.ensemble = ensemble;
         this.writeQuorum = writeQuorum;
         this.ackQuorum = ackQuorum;
-        this.pendingAdds = ensemble.size();
         this.successAdds = new HashSet<>();
         this.lh = lh;
         this.callerFuture = callerFuture;
+        this.isCancelled = isCancelled;
     }
 
     public void begin() {
@@ -60,13 +62,19 @@ public class PendingAddOp {
 
         String bookieId = ensemble.get(bookieIndex);
         messageSender.sendRequest(bookieId, Commands.Bookie.ADD_ENTRY, body)
-                .thenAccept((JsonNode reply) -> handleReply(reply));
-        pendingAdds++;
+                .thenAccept((JsonNode reply) -> handleReply(reply))
+                .whenComplete((Void v, Throwable t) -> {
+                    if (t != null) {
+                        logger.logError("Add operation failed", t);
+                        completeCallerFuture(ReturnCodes.UNEXPECTED_ERROR);
+                        aborted = true;
+                    }
+                });
     }
 
     public void handleReply(JsonNode reply) {
-        if (aborted) {
-            // ignores any pending responses
+        if (isCancelled.get() || aborted) {
+            callerFuture.completeExceptionally(new OperationCancelledException());
             return;
         }
 
@@ -74,7 +82,6 @@ public class PendingAddOp {
         String bookieId = reply.get(Fields.SOURCE).asText();
         String rc = body.get(Fields.RC).asText();
         int bookieIndex = ensemble.indexOf(bookieId);
-        pendingAdds--;
 
         if (rc.equals(ReturnCodes.OK)) {
             successAdds.add(bookieIndex);
@@ -82,7 +89,7 @@ public class PendingAddOp {
         } else if (rc.equals(ReturnCodes.Bookie.FENCED)) {
             lh.handleUnrecoverableErrorDuringAdd(rc);
         } else {
-            Map<Integer,String> failedBookies = new HashMap<>();
+            Map<Integer, String> failedBookies = new HashMap<>();
             failedBookies.put(bookieIndex, bookieId);
             lh.handleBookieFailure(failedBookies);
         }
@@ -104,10 +111,6 @@ public class PendingAddOp {
             default:
                 callerFuture.completeExceptionally(new BkException("Add failed", rc));
         }
-    }
-
-    public void abort() {
-        aborted = true;
     }
 
     void unsetSuccessAndSendWriteRequest(List<String> ensemble, int bookieIndex) {

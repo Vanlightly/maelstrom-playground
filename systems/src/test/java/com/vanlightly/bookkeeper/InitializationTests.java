@@ -1,10 +1,14 @@
 package com.vanlightly.bookkeeper;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.vanlightly.bookkeeper.utils.NetworkRouter;
 import org.junit.Test;
 
+import java.util.Arrays;
+import java.util.List;
+import java.util.Random;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class InitializationTests {
@@ -16,10 +20,66 @@ public class InitializationTests {
         msgId = 0;
     }
 
+    private void print(JsonNode msg) {
+        String dest = msg.get("dest").asText();
+        String source = msg.get("src").asText();
+        String type = msg.path("body").path("type").asText();
+
+        boolean isReply = msg.path("body").has("in_reply_to");
+        String reqOrReply = "request";
+        if (isReply) {
+            reqOrReply = "reply";
+        }
+
+        switch (type) {
+            case Commands.Bookie.READ_ENTRY:
+                if (isReply) {
+                    type = type
+                            + " l=" + msg.path("body").path(Fields.L.LEDGER_ID).asLong()
+                            + " e=" + msg.path("body").path(Fields.L.ENTRY_ID).asLong()
+                            + " lac=" + msg.path("body").path(Fields.L.LAC).asLong();
+                } else {
+                    type = type
+                            + " l=" + msg.path("body").path(Fields.L.LEDGER_ID).asLong()
+                            + " e=" + msg.path("body").path(Fields.L.ENTRY_ID).asLong();
+                }
+                break;
+            case Commands.Bookie.READ_LAC:
+                if (isReply) {
+                    type = type
+                            + " lac=" + msg.path("body").path(Fields.L.LAC).asLong();
+                } else {
+                    type = type
+                            + " l=" + msg.path("body").path(Fields.L.LEDGER_ID).asLong();
+                }
+                break;
+            case Commands.Bookie.READ_LAC_LONG_POLL:
+                if (isReply) {
+                    type = type
+                            + " l=" + msg.path("body").path(Fields.L.LEDGER_ID).asLong()
+                            + " lac=" + msg.path("body").path(Fields.L.LAC).asLong();
+                } else {
+                    type = type
+                            + " l=" + msg.path("body").path(Fields.L.LEDGER_ID).asLong()
+                            + " plac=" + msg.path("body").path(Fields.L.PREVIOUS_LAC).asLong();
+                }
+                break;
+            case Commands.Bookie.ADD_ENTRY:
+                type = type
+                        + " l=" + msg.path("body").path(Fields.L.LEDGER_ID).asLong()
+                        + " e=" + msg.path("body").path(Fields.L.ENTRY_ID).asLong()
+                        + " lac=" + msg.path("body").path(Fields.L.LAC).asLong();
+                break;
+        }
+
+        System.out.println("(" + source + ")-[" + type + "]->(" + dest + ") " + reqOrReply);
+    }
+
     @Test
     public void testNoKvRequests() {
         AtomicBoolean isCancelled = new AtomicBoolean();
-        NetworkRouter router = new NetworkRouter(isCancelled);
+        NetworkRouter router = new NetworkRouter(isCancelled,
+                (msg) -> print(msg));
         int nodeCount = 6;
 
         for (int n = 1; n <= nodeCount; n++) {
@@ -42,7 +102,8 @@ public class InitializationTests {
     @Test
     public void testOneKvWrite() {
         AtomicBoolean isCancelled = new AtomicBoolean();
-        NetworkRouter router = new NetworkRouter(isCancelled);
+        NetworkRouter router = new NetworkRouter(isCancelled,
+                (msg) -> print(msg));
         int nodeCount = 6;
 
         for (int n = 1; n <= nodeCount; n++) {
@@ -57,10 +118,12 @@ public class InitializationTests {
 
         try {
             Thread.sleep(2000);
+            List<String> partionable = Arrays.asList("n5", "n6");
+            Random r  = new Random();
+            String lastNode = null;
 
-            for (int i=0; i<1000; i++) {
-
-                String kvStoreNode = Node.getFirstKvStoreNodeId();
+            for (int i=0; i<100; i++) {
+                String kvStoreNode = Node.getKvStoreNode();
                 ObjectNode op = mapper.createObjectNode();
                 op.put(Fields.KV.Op.TYPE, Constants.KvStore.Ops.WRITE);
                 op.put(Fields.KV.Op.KEY, "A"+i);
@@ -78,7 +141,13 @@ public class InitializationTests {
 
                 msgId++;
                 router.send(kvStoreNode, writeMsg.toString());
-                if (i %100 == 0) {
+                if (i %10 == 0) {
+                    String target = partionable.get(r.nextInt(partionable.size()));
+                    router.partitionNode(target, true, true);
+                    if (lastNode != null && !lastNode.equals(target)) {
+                        router.healNode(target);
+                    }
+                    lastNode = target;
                     Thread.sleep(2000);
                 }
             }

@@ -1,16 +1,16 @@
 package com.vanlightly.bookkeeper.kv.bkclient;
 
-import com.vanlightly.bookkeeper.Commands;
-import com.vanlightly.bookkeeper.OperationCancelledException;
-import com.vanlightly.bookkeeper.ReturnCodes;
+import com.vanlightly.bookkeeper.*;
 import com.vanlightly.bookkeeper.kv.log.Position;
 import com.vanlightly.bookkeeper.metadata.LedgerMetadata;
 import com.vanlightly.bookkeeper.metadata.Versioned;
+import com.vanlightly.bookkeeper.util.Futures;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class RecoveryOp {
+    Logger logger;
     LedgerHandle lh;
     int readCount;
     int writeCount;
@@ -18,9 +18,11 @@ public class RecoveryOp {
     CompletableFuture<Void> callerFuture;
     AtomicBoolean isCancelled;
 
-    public RecoveryOp(LedgerHandle lh,
+    public RecoveryOp(Logger logger,
+                      LedgerHandle lh,
                       CompletableFuture<Void> callerFuture,
                       AtomicBoolean isCancelled) {
+        this.logger = logger;
         this.lh = lh;
         this.callerFuture = callerFuture;
         this.isCancelled = isCancelled;
@@ -30,15 +32,29 @@ public class RecoveryOp {
     }
 
     public void begin() {
+        logger.logDebug("RECOVERY: Starting recovery op");
         lh.readLac()
                 .thenCompose((Result<Entry> lacResult) -> {
+                    long lac = -1L;
                     long entryIdOfCurrentEnsemble = lh.versionedMetadata.getValue()
                             .getEnsembles()
                             .lastKey();
-                    long lac = Math.max(lacResult.getData().getLac(), entryIdOfCurrentEnsemble);
+
+                    switch (lacResult.getCode()) {
+                        case ReturnCodes.OK:
+                            lac = Math.max(lacResult.getData().getLac(), entryIdOfCurrentEnsemble-1L);
+                            break;
+                        case ReturnCodes.Ledger.UNKNOWN:
+                            lac = entryIdOfCurrentEnsemble - 1L;
+                            break;
+                        default:
+                            return Futures.failedFuture(
+                                    new BkException("Could not read LAC during rcovery", lacResult.getCode()));
+                    };
                     lh.setLastAddConfirmed(lac);
                     lh.setLastAddPushed(lac);
-                    return readNext(lh, new Position(lh.getLedgerId(), lac+1));
+                    logger.logDebug("RECOVERY: Starting recovery with LAC " + lac);
+                    return readNext(lh, new Position(lh.getLedgerId(), lac));
                 })
                 .whenComplete((Position pos, Throwable t1) -> {
                     // have now read up to as far as we can go, or an error has occurred
@@ -51,13 +67,17 @@ public class RecoveryOp {
                         // some write results pending, but if not then close the ledger now
                         readsComplete = true;
                         if (readCount == writeCount) {
+                            logger.logDebug("RECOVERY: Reads and writes complete.");
                             closeLedger();
+                        } else {
+                            logger.logDebug("RECOVERY: Reads complete. Waiting for writes to complete");
                         }
                     }
                 });
     }
 
     private CompletableFuture<Position> readNext(LedgerHandle lh, Position prev) {
+        logger.logDebug("RECOVERY: Last read: " + prev);
         return lh.parallelRead(prev.getEntryId() + 1, Commands.Bookie.READ_ENTRY, true)
                 .thenCompose((Result<Entry> result) -> {
                     if (isCancelled.get()) {
@@ -66,6 +86,9 @@ public class RecoveryOp {
                     } else {
                         if (result.getCode().equals(ReturnCodes.OK)) {
                             readCount++;
+
+                            logger.logDebug("RECOVERY: Read " + readCount + " successful " + result.getData() +
+                                    ". Writing entry back to ensemble.");
 
                             // write back the entry to the ledger to ensure it reaches write quorum
                             lh.addEntry(result.getData().getValue())
@@ -81,7 +104,10 @@ public class RecoveryOp {
                                                 // write then close the ledger
                                                 writeCount++;
 
+                                                logger.logDebug("RECOVERY: Write " + readCount + " successful " + result.getData());
+
                                                 if (readsComplete && readCount == writeCount) {
+                                                    logger.logDebug("RECOVERY: Writes complete");
                                                     closeLedger();
                                                 }
                                             }
@@ -104,13 +130,16 @@ public class RecoveryOp {
     }
 
     private void closeLedger() {
+        logger.logDebug("RECOVERY: Closing the ledger");
         lh.close()
             .whenComplete((Versioned<LedgerMetadata> vlm, Throwable t2) -> {
                 if (isCancelled.get()) {
                     callerFuture.completeExceptionally(new OperationCancelledException());
                 } else if (t2 != null) {
+                    logger.logError("RECOVERY: Failed to close the ledger", t2);
                     callerFuture.completeExceptionally(t2);
                 } else {
+                    logger.logDebug("RECOVERY: Ledger closed");
                     callerFuture.complete(null);
                 }
             });

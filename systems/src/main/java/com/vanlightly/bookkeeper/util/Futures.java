@@ -1,24 +1,38 @@
-package com.vanlightly.bookkeeper;
+package com.vanlightly.bookkeeper.util;
+
+import com.vanlightly.bookkeeper.OperationCancelledException;
+import com.vanlightly.bookkeeper.TransientException;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
-public class FutureRetries {
+public class Futures {
+
+    // set from the node to use its delay mechanism
+    public static Function<Integer, CompletableFuture<Void>> Delay;
+
     public static <T> void retryTransient(CompletableFuture<T> callerFuture,
-                          Supplier<CompletableFuture<T>> futureOp) {
+                                          AtomicBoolean isCancelled,
+                                          Supplier<CompletableFuture<T>> futureOp) {
         if (!callerFuture.isDone()) {
             final CompletableFuture<T> operationFuture = futureOp.get();
 
             operationFuture.whenComplete((value, throwable) -> {
+                if (isCancelled.get()) {
+                    System.out.println("Retry cancelled!!!!");
+                    callerFuture.completeExceptionally(new OperationCancelledException());
+                }
+
                 if (throwable != null) {
                     throwable = unwrap(throwable);
 
                     if (throwable instanceof TransientException) {
-                        sleepSynchronously(100);
-                        retryTransient(callerFuture,
-                                futureOp);
+                        Delay.apply(100).thenRun(() ->
+                            retryTransient(callerFuture, isCancelled, futureOp));
                     } else {
                         callerFuture.completeExceptionally(throwable);
                     }
@@ -30,17 +44,22 @@ public class FutureRetries {
     }
 
     public static <T> void retryForever(CompletableFuture<T> callerFuture,
+                                        AtomicBoolean isCancelled,
                                         Supplier<CompletableFuture<T>> futureOp) {
         if (!callerFuture.isDone()) {
             final CompletableFuture<T> operationFuture = futureOp.get();
 
             operationFuture.whenComplete((value, throwable) -> {
+                if (isCancelled.get()) {
+                    callerFuture.completeExceptionally(new OperationCancelledException());
+                }
+
                 if (throwable != null) {
                     if (throwable instanceof OperationCancelledException) {
                         callerFuture.completeExceptionally(throwable);
                     } else {
-                        sleepSynchronously(100);
-                        retryForever(callerFuture, futureOp);
+                        Delay.apply(100).thenRun(() ->
+                            retryForever(callerFuture, isCancelled, futureOp));
                     }
                 } else {
                     callerFuture.complete(value);
@@ -55,26 +74,17 @@ public class FutureRetries {
         return future;
     }
 
-    public static <T> CompletableFuture<T> nonRetryableFailedFuture(Throwable t) {
+    public static <T> CompletableFuture<T> failedFuture(Throwable t) {
         CompletableFuture<T> future = new CompletableFuture<>();
         future.completeExceptionally(t);
         return future;
     }
 
-    private static Throwable unwrap(Throwable t) {
+    public static Throwable unwrap(Throwable t) {
         if (t instanceof ExecutionException || t instanceof CompletionException) {
             return unwrap(t.getCause());
         } else {
             return t;
-        }
-    }
-
-    // trying to keep this single threaded
-    private static void sleepSynchronously(int ms) {
-        try {
-            Thread.sleep(ms);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
         }
     }
 }
