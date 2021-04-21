@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
 set -ex
 
-$GRAALVM_HOME/bin/javac Main.java
-$GRAALVM_HOME/bin/native-image Main
 
-#javac ExtListDir.java
-#$GRAALVM_HOME/bin/native-image --js ExtListDir
+$GRAALVM_HOME/bin/native-image -jar systems-0.1-SNAPSHOT.jar bkkvs --no-fallback
