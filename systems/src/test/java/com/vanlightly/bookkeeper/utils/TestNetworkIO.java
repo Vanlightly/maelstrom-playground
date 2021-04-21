@@ -1,56 +1,61 @@
 package com.vanlightly.bookkeeper.utils;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vanlightly.bookkeeper.Commands;
+import com.vanlightly.bookkeeper.Fields;
 import com.vanlightly.bookkeeper.network.NetworkIO;
 
-import java.util.ArrayDeque;
-import java.util.Queue;
-import java.util.concurrent.ArrayBlockingQueue;
+import java.util.*;
 import java.util.concurrent.BlockingQueue;
 
 public class TestNetworkIO implements NetworkIO {
+    private ObjectMapper mapper;
     private String nodeId;
     private Queue<String> inQueue;
     private BlockingQueue<String> outQueue;
-    private boolean loseIncoming;
-    private boolean loseOutgoing;
+    private Set<String> blockedNodes;
 
-    public TestNetworkIO(String nodeId, BlockingQueue<String> outQueue) {
+    public TestNetworkIO(String nodeId,
+                         BlockingQueue<String> outQueue,
+                         ObjectMapper mapper) {
         this.nodeId = nodeId;
         this.outQueue = outQueue;
+        this.mapper = mapper;
         this.inQueue = new ArrayDeque<>();
+        this.blockedNodes = new HashSet<>();
     }
 
-    public boolean losesIncoming() {
-        return loseIncoming;
+    public void addBlockedNode(String node) {
+        this.blockedNodes.add(node);
     }
 
-    public void setLoseIncoming(boolean loseIncoming) {
-        this.loseIncoming = loseIncoming;
+    public void removeBlockedNode(String node) {
+        this.blockedNodes.remove(node);
     }
 
-    public boolean losesOutgoing() {
-        return loseOutgoing;
+    public void clearBlockedNodes() {
+        this.blockedNodes.clear();
     }
 
-    public void setLoseOutgoing(boolean loseOutgoing) {
-        this.loseOutgoing = loseOutgoing;
+    public Set<String> getBlockedNodes() {
+        return blockedNodes;
     }
 
-    public void loseAll() {
-        loseIncoming = true;
-        loseOutgoing = true;
-    }
+    public void route(String msgStr) {
+        JsonNode msg = null;
+        try {
+            msg = mapper.readTree(msgStr);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException(e);
+        }
 
-    public void loseNone() {
-        loseIncoming = false;
-        loseOutgoing = false;
-    }
-
-    public void route(String msg) {
-        if (!loseIncoming || msg.contains(Commands.PRINT_STATE)) {
-            inQueue.add(msg);
-        } else if (msg.contains("c1")){
+        String source = msg.get(Fields.SOURCE).asText();
+        String dest = msg.get(Fields.DEST).asText();
+        if (!blockedNodes.contains(dest) || msgStr.contains(Commands.PRINT_STATE)) {
+            inQueue.add(msgStr);
+        } else if (source.equals("c1")) {
             System.out.println("Dropped msg from c1 to node " + nodeId + " Msg: " + msg);
         }
     }
@@ -66,9 +71,17 @@ public class TestNetworkIO implements NetworkIO {
     }
 
     @Override
-    public void write(String msg) {
-        if (!loseOutgoing) {
-            outQueue.add(msg);
+    public void write(String msgStr) {
+        JsonNode msg = null;
+        try {
+            msg = mapper.readTree(msgStr);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException(e);
+        }
+
+        String dest = msg.get(Fields.DEST).asText();
+        if (!blockedNodes.contains(dest)) {
+            outQueue.add(msgStr);
         }
     }
 }

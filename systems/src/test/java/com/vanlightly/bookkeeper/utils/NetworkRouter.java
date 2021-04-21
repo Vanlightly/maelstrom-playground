@@ -36,7 +36,7 @@ public class NetworkRouter {
     }
 
     public void addNode(String nodeId) {
-        TestNetworkIO net = new TestNetworkIO(nodeId, msgQueue);
+        TestNetworkIO net = new TestNetworkIO(nodeId, msgQueue, mapper);
         nodeNetworkIo.put(nodeId, net);
         ExecutorService runnerExecutor = Executors.newSingleThreadExecutor(new NodeThreadFactory(nodeId));
         runnerExecutor.submit(() -> {
@@ -51,31 +51,73 @@ public class NetworkRouter {
         nodeRunners.put(nodeId, runnerExecutor);
     }
 
-    public void partitionNode(String nodeId, boolean incoming, boolean outgoing) {
+    public void partitionNode(String nodeId) {
         TestNetworkIO net = nodeNetworkIo.get(nodeId);
         if (net != null) {
-            net.setLoseIncoming(incoming);
-            net.setLoseOutgoing(outgoing);
-            System.out.println("Partitioning " + nodeId + " in=" + incoming + " out=" + outgoing);
+            for (String node : nodeRunners.keySet()) {
+                if (!nodeId.equals(node)) {
+                    net.addBlockedNode(node);
+
+                    TestNetworkIO otherNet = nodeNetworkIo.get(node);
+                    otherNet.addBlockedNode(nodeId);
+                }
+            }
+            System.out.println("Partitioning " + nodeId);
         } else {
             System.out.println("Cannot partition " + nodeId + " as it does not exist");
+        }
+    }
+
+    public void partitionNodes(String node1, String node2) {
+        partitionNodeLink(node1, node2);
+        partitionNodeLink(node2, node1);
+    }
+
+    public void partitionNodeLink(String node1, String node2) {
+        TestNetworkIO net = nodeNetworkIo.get(node1);
+        if (net != null) {
+            net.addBlockedNode(node2);
+        } else {
+            System.out.println("Cannot partition " + node1 + " as it does not exist");
         }
     }
 
     public void healNode(String nodeId) {
         TestNetworkIO net = nodeNetworkIo.get(nodeId);
         if (net != null) {
-            net.loseNone();
+            net.clearBlockedNodes();
+
+            for (String node : nodeRunners.keySet()) {
+                if (!nodeId.equals(node)) {
+                    TestNetworkIO otherNet = nodeNetworkIo.get(node);
+                    otherNet.removeBlockedNode(nodeId);
+                }
+            }
+
             System.out.println("Healing " + nodeId);
         } else {
             System.out.println("Cannot heal " + nodeId + " as it does not exist");
         }
     }
 
+    public void healNodes(String node1, String node2) {
+        healNodeLink(node1, node2);
+        healNodeLink(node2, node1);
+    }
+
+    public void healNodeLink(String node1, String node2) {
+        TestNetworkIO net = nodeNetworkIo.get(node1);
+        if (net != null) {
+            net.removeBlockedNode(node2);
+        } else {
+            System.out.println("Cannot heal network of " + node1 + " as it does not exist");
+        }
+    }
+
     public boolean isPartitioned(String nodeId) {
         TestNetworkIO net = nodeNetworkIo.get(nodeId);
         if (net != null) {
-            return net.losesIncoming() || net.losesOutgoing();
+            return !net.getBlockedNodes().isEmpty();
         } else {
             return false;
         }

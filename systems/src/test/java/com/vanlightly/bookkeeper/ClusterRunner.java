@@ -42,12 +42,24 @@ public class ClusterRunner {
                     cr.printState(nodeId);
                     break;
                 case "p":
-                    nodeId = parts[1];
-                    cr.partitionNode(nodeId);
+                    if (parts.length == 2) {
+                        nodeId = parts[1];
+                        cr.partitionNode(nodeId);
+                    } else if (parts.length == 3) {
+                        String node1 = parts[1];
+                        String node2 = parts[2];
+                        cr.partitionNodes(node1, node2);
+                    }
                     break;
                 case "h":
-                    nodeId = parts[1];
-                    cr.healNode(nodeId);
+                    if (parts.length == 2) {
+                        nodeId = parts[1];
+                        cr.healNode(nodeId);
+                    } else if (parts.length == 3) {
+                        String node1 = parts[1];
+                        String node2 = parts[2];
+                        cr.healNodes(node1, node2);
+                    }
                     break;
                 default:
                     System.out.println("Bad command");
@@ -178,11 +190,19 @@ public class ClusterRunner {
     }
 
     public void partitionNode(String nodeId) {
-        router.partitionNode(nodeId, true, true);
+        router.partitionNode(nodeId);
+    }
+
+    public void partitionNodes(String node1, String node2) {
+        router.partitionNodes(node1, node2);
     }
 
     public void healNode(String nodeId) {
         router.healNode(nodeId);
+    }
+
+    public void healNodes(String node1, String node2) {
+        router.healNodes(node1, node2);
     }
 
     private String getKvStoreNode() {

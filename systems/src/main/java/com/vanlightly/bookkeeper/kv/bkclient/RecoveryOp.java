@@ -78,7 +78,8 @@ public class RecoveryOp {
 
     private CompletableFuture<Position> readNext(LedgerHandle lh, Position prev) {
         logger.logDebug("RECOVERY: Last read: " + prev);
-        return lh.parallelRead(prev.getEntryId() + 1, Commands.Bookie.READ_ENTRY, true)
+        return lh.parallelRead(prev.getEntryId() + 1, Commands.Bookie.READ_ENTRY,
+                true, true, true)
                 .thenCompose((Result<Entry> result) -> {
                     if (isCancelled.get()) {
                         callerFuture.completeExceptionally(new OperationCancelledException());
@@ -91,7 +92,7 @@ public class RecoveryOp {
                                     ". Writing entry back to ensemble.");
 
                             // write back the entry to the ledger to ensure it reaches write quorum
-                            lh.addEntry(result.getData().getValue())
+                            lh.addRecoveryEntry(result.getData().getValue())
                                     .whenComplete((Entry e2, Throwable t2) -> {
                                         if (!isCancelled.get()) {
                                             if (t2 != null) {

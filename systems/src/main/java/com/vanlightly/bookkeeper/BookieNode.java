@@ -56,22 +56,16 @@ public class BookieNode extends Node {
                     printState();
                     break;
                 case Commands.Bookie.ADD_ENTRY:
-                    handleAddEntry(request, false);
+                    handleAddEntry(request);
                     break;
                 case Commands.Bookie.READ_ENTRY:
-                    handleReadEntry(request, false);
+                    handleReadEntry(request);
                     break;
                 case Commands.Bookie.READ_LAC:
                     handleReadLac(request);
                     break;
                 case Commands.Bookie.READ_LAC_LONG_POLL:
                     handleReadLacLongPoll(request);
-                    break;
-                case Commands.Bookie.RECOVERY_ADD_ENTRY:
-                    handleAddEntry(request, true);
-                    break;
-                case Commands.Bookie.RECOVERY_READ_ENTRY:
-                    handleReadEntry(request, true);
                     break;
                 default:
                     logger.logError("Bad command type: " + type);
@@ -98,7 +92,11 @@ public class BookieNode extends Node {
         }
     }
 
-    private void handleAddEntry(JsonNode msg, boolean isRecoveryAdd) {
+    private void handleAddEntry(JsonNode msg) {
+        if (!checkLedgerWritable(msg)) {
+            return;
+        }
+
         JsonNode body = msg.get(Fields.BODY);
         long ledgerId = body.get(Fields.L.LEDGER_ID).asLong();
         long entryId = body.get(Fields.L.ENTRY_ID).asLong();
@@ -111,24 +109,25 @@ public class BookieNode extends Node {
             ledgers.put(ledgerId, ledger);
         }
 
-        if (ledger.isFenced() && !isRecoveryAdd) {
-            reply(msg, ReturnCodes.Bookie.FENCED);
-        } else {
-            ledger.add(entryId, lac, value);
-            reply(msg, ReturnCodes.OK);
-        }
+        ledger.add(entryId, lac, value);
+        reply(msg, ReturnCodes.OK);
     }
 
-    private void handleReadEntry(JsonNode msg, boolean isRecoveryRead) {
-        if (!checkLedgerOk(msg, isRecoveryRead)) {
+    private void handleReadEntry(JsonNode msg) {
+        if (!checkLedgerExists(msg)) {
             return;
         }
 
         JsonNode body = msg.get(Fields.BODY);
         long ledgerId = body.get(Fields.L.LEDGER_ID).asLong();
         long entryId = body.get(Fields.L.ENTRY_ID).asLong();
+        boolean isFencingRead = msg.get(Fields.BODY).path(Fields.L.FENCE).asBoolean(false);
 
         Ledger ledger = ledgers.get(ledgerId);
+
+        if (isFencingRead) {
+            ledger.fenceLedger();
+        }
 
         ObjectNode res = mapper.createObjectNode();
         res.put(Fields.L.LEDGER_ID, ledgerId);
@@ -146,24 +145,29 @@ public class BookieNode extends Node {
     }
 
     private void handleReadLac(JsonNode msg) {
-        if (!checkLedgerOk(msg, false)) {
+        if (!checkLedgerExists(msg)) {
             return;
         }
 
         JsonNode body = msg.get(Fields.BODY);
         long ledgerId = body.get(Fields.L.LEDGER_ID).asLong();
+        boolean isFencingRead = msg.get(Fields.BODY).path(Fields.L.FENCE).asBoolean(false);
 
         ObjectNode res = mapper.createObjectNode();
         res.put(Fields.L.LEDGER_ID, ledgerId);
 
         Ledger ledger = ledgers.get(ledgerId);
+        if (isFencingRead) {
+            ledger.fenceLedger();
+        }
+
         res.put(Fields.L.ENTRY_ID, -1L);
         res.put(Fields.L.LAC, ledger.getLac());
         reply(msg, ReturnCodes.OK, res);
     }
 
     private void handleReadLacLongPoll(JsonNode msg) {
-        if (!checkLedgerOk(msg, false)) {
+        if (!checkLedgerExists(msg)) {
             return;
         }
 
@@ -204,7 +208,7 @@ public class BookieNode extends Node {
         }
     }
 
-    private boolean checkLedgerOk(JsonNode msg, boolean isRecoveryOp) {
+    private boolean checkLedgerExists(JsonNode msg) {
         JsonNode body = msg.get(Fields.BODY);
         long ledgerId = body.get(Fields.L.LEDGER_ID).asLong();
 
@@ -214,13 +218,27 @@ public class BookieNode extends Node {
             res.put(Fields.L.LEDGER_ID, ledgerId);
             reply(msg, ReturnCodes.Bookie.NO_SUCH_LEDGER, res);
             return false;
-        } else if (ledger.isFenced() && !isRecoveryOp) {
-            ObjectNode res = mapper.createObjectNode();
-            res.put(Fields.L.LEDGER_ID, ledgerId);
-            reply(msg, ReturnCodes.Bookie.FENCED, res);
-            return false;
-        } else {
-            return true;
         }
+
+        return true;
+    }
+
+    private boolean checkLedgerWritable(JsonNode msg) {
+        JsonNode body = msg.get(Fields.BODY);
+        long ledgerId = body.get(Fields.L.LEDGER_ID).asLong();
+
+        Ledger ledger = ledgers.get(ledgerId);
+
+        if (ledger != null) {
+            boolean isRecoveryAdd = msg.get(Fields.BODY).path(Fields.L.RECOVERY).asBoolean(false);
+            if (ledger.isFenced() && !isRecoveryAdd) {
+                ObjectNode res = mapper.createObjectNode();
+                res.put(Fields.L.LEDGER_ID, ledgerId);
+                reply(msg, ReturnCodes.Bookie.FENCED, res);
+                return false;
+            }
+        }
+
+        return true;
     }
 }

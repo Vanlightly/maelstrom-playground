@@ -1,12 +1,12 @@
 package com.vanlightly.bookkeeper.bookie;
 
 import com.vanlightly.bookkeeper.Logger;
+import com.vanlightly.bookkeeper.ReturnCodes;
+import com.vanlightly.bookkeeper.kv.bkclient.BkException;
+import com.vanlightly.bookkeeper.util.DeadlineCollection;
 
-import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
-import java.util.stream.Collectors;
 
 public class Ledger {
     Logger logger;
@@ -14,7 +14,8 @@ public class Ledger {
     Map<Long, String> entries;
     boolean isFenced;
     long lac;
-    NavigableMap<Long, List<LongPollLacRead>> lacLongPollReads;
+    DeadlineCollection<LongPollLacRead> lacLongPollReadsByLac;
+    DeadlineCollection<LongPollLacRead> lacLongPollReadsByTimeout;
 
     public Ledger(Logger logger, long ledgerId) {
         this.logger = logger;
@@ -22,28 +23,27 @@ public class Ledger {
         this.entries = new HashMap<>();
         this.isFenced = false;
         this.lac = -1L;
-        this.lacLongPollReads = new TreeMap<>();
+        this.lacLongPollReadsByLac = new DeadlineCollection<>();
+        this.lacLongPollReadsByTimeout = new DeadlineCollection<>();
     }
 
-    public void add(Long entryId, Long lac, String value) {
+    public void add(Long entryId, Long entryLac, String value) {
         entries.put(entryId, value);
-        logger.logDebug("Adding entry=" + entryId + ", lac=" + lac + ", value=" + value);
+        logger.logDebug("Adding entry=" + entryId + ", lac=" + entryLac + ", value=" + value);
 
-        if (lac > this.lac) {
-            this.lac = lac;
+        if (entryLac > this.lac) {
+            this.lac = entryLac;
         }
 
-        NavigableMap<Long, List<LongPollLacRead>> completableLpReads = lacLongPollReads.headMap(lac, true);
-        for (Map.Entry<Long, List<LongPollLacRead>> lpReads : completableLpReads.entrySet()) {
-            lpReads.getValue().stream().forEach((LongPollLacRead lpRead) -> {
-                logger.logDebug("Long poll read response at entry: " + lpReads.getKey());
-                String val = read(lpRead.previousLac + 1);
-                lpRead.getFuture().complete(new Entry(ledgerId,
-                        lpRead.previousLac + 1,
-                        this.lac,
-                        val));
-            });
-            lacLongPollReads.remove(lpReads.getKey());
+        while (lacLongPollReadsByLac.hasNext(entryLac)) {
+            LongPollLacRead lpRead = lacLongPollReadsByLac.next();
+            logger.logDebug("Long poll read response by LAC: " + entryLac);
+            String val = read(lpRead.previousLac + 1);
+            lpRead.getFuture().complete(new Entry(ledgerId,
+                    lpRead.previousLac + 1,
+                    this.lac,
+                    val));
+            lpRead.makeInactive();
         }
     }
 
@@ -59,8 +59,18 @@ public class Ledger {
         return isFenced;
     }
 
-    public void setFenced(boolean fenced) {
-        isFenced = fenced;
+    public void fenceLedger() {
+        isFenced = true;
+
+        for (LongPollLacRead lpRead : lacLongPollReadsByLac.getAll()) {
+            if (lpRead.isActive()) {
+                lpRead.getFuture().completeExceptionally(
+                        new BkException("Ledger fenced", ReturnCodes.Bookie.FENCED));
+            }
+        }
+
+        lacLongPollReadsByLac.clear();
+        lacLongPollReadsByTimeout.clear();
     }
 
     public long getLac() {
@@ -79,42 +89,33 @@ public class Ledger {
                     this.lac,
                     val));
         } else {
-            lacLongPollReads.compute(previousLac, (Long k, List<LongPollLacRead> v) -> {
-                if (v == null) {
-                    v = new ArrayList<>();
-                }
-                v.add(new LongPollLacRead(future, previousLac, timeoutMs));
-                return v;
-            });
+            LongPollLacRead lpRead = new LongPollLacRead(future, previousLac);
+            lacLongPollReadsByLac.add(previousLac + 1, lpRead);
+            lacLongPollReadsByTimeout.add(System.currentTimeMillis() + timeoutMs, lpRead);
         }
     }
 
     public boolean expireLacLongPollReads() {
-        Instant now = Instant.now();
+        long now = System.currentTimeMillis();
 
-        List<LongPollLacRead> expiredReads =
-                lacLongPollReads.entrySet()
-                .stream()
-                .flatMap((e) -> e.getValue()
-                                    .stream()
-                                    .filter(x -> x.hasExpired(now)))
-                .collect(Collectors.toList());
+        boolean foundExpired = false;
 
-        if (expiredReads.isEmpty()) {
-            return false;
-        } else {
-            for (LongPollLacRead expiredRead : expiredReads) {
+        while (lacLongPollReadsByTimeout.hasNext(now)) {
+            LongPollLacRead expiredRead = lacLongPollReadsByTimeout.next();
+            if (expiredRead.isActive()) {
                 long entryId = expiredRead.getPreviousLac();
                 expiredRead.getFuture().complete(new Entry(ledgerId,
                         entryId,
                         this.lac,
                         null));
-                lacLongPollReads.get(expiredRead.getPreviousLac()).remove(expiredRead);
+                expiredRead.makeInactive();
                 logger.logDebug("Long poll read timeout at entry: " + entryId);
-            }
 
-            return true;
+                foundExpired = true;
+            }
         }
+
+        return foundExpired;
     }
 
     @Override
@@ -130,12 +131,12 @@ public class Ledger {
     private static class LongPollLacRead {
         private CompletableFuture<Entry> future;
         private long previousLac;
-        private Instant deadline;
+        private boolean active;
 
-        public LongPollLacRead(CompletableFuture<Entry> future, long previousLac, int timeoutMs) {
+        public LongPollLacRead(CompletableFuture<Entry> future, long previousLac) {
             this.future = future;
             this.previousLac = previousLac;
-            this.deadline = Instant.now().plus(timeoutMs, ChronoUnit.MILLIS);
+            this.active = true;
         }
 
         public CompletableFuture<Entry> getFuture() {
@@ -146,8 +147,12 @@ public class Ledger {
             return previousLac;
         }
 
-        public boolean hasExpired(Instant now) {
-            return now.isAfter(deadline);
+        public boolean isActive() {
+            return active;
+        }
+
+        public void makeInactive() {
+            active = false;
         }
     }
 

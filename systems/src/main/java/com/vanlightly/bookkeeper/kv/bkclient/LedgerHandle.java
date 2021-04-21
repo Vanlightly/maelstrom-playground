@@ -96,6 +96,14 @@ public class LedgerHandle {
     }
 
     public CompletableFuture<Entry> addEntry(String value) {
+        return addEntry(value, false);
+    }
+
+    public CompletableFuture<Entry> addRecoveryEntry(String value) {
+        return addEntry(value, true);
+    }
+
+    private CompletableFuture<Entry> addEntry(String value, boolean isRecoveryAdd) {
         CompletableFuture<Entry> future = new CompletableFuture<>();
 
         lastAddPushed++;
@@ -108,6 +116,7 @@ public class LedgerHandle {
                 versionedMetadata.getValue().getWriteQuorum(),
                 versionedMetadata.getValue().getAckQuorum(),
                 this,
+                isRecoveryAdd,
                 future,
                 isCancelled);
 
@@ -181,19 +190,27 @@ public class LedgerHandle {
     }
 
     public CompletableFuture<Result<Entry>> readLac() {
-        return parallelRead(-1L, Commands.Bookie.READ_LAC, true);
+        return parallelRead(-1L, Commands.Bookie.READ_LAC, true, false, false);
+    }
+
+    public CompletableFuture<Result<Entry>> readLacWithFencing() {
+        return parallelRead(-1L, Commands.Bookie.READ_LAC, true, true, false);
     }
 
     public CompletableFuture<Result<Entry>> lacLongPollRead() {
-        return parallelRead(lastAddConfirmed, Commands.Bookie.READ_LAC_LONG_POLL, false);
+        return parallelRead(lastAddConfirmed, Commands.Bookie.READ_LAC_LONG_POLL,
+                false, false, false);
     }
 
     /*
         Sends a read all the whole ensemble in parallel and returns the entry with the highest LAC
         as long as enough bookies (AckQuorum) respond positively.
      */
-    public CompletableFuture<Result<Entry>> parallelRead(long entryId, String readCommand,
-                                                         boolean requiresQuorum) {
+    public CompletableFuture<Result<Entry>> parallelRead(long entryId,
+                                                         String readCommand,
+                                                         boolean requiresQuorum,
+                                                         boolean fence,
+                                                         boolean recovery) {
         CompletableFuture<Result<Entry>> readFuture = new CompletableFuture<>();
 
         ObjectNode readReq = mapper.createObjectNode();
@@ -206,6 +223,14 @@ public class LedgerHandle {
             msgTimeout = Constants.KvStore.LongPollResponseTimeoutMs;
         } else {
             readReq.put(Fields.L.ENTRY_ID, entryId);
+        }
+
+        if (fence) {
+            readReq.put(Fields.L.FENCE, true);
+        }
+
+        if (recovery) {
+            readReq.put(Fields.L.RECOVERY, true);
         }
 
         CompletableFuture<Result<Entry>>[] futures = new CompletableFuture[versionedMetadata.getValue().getWriteQuorum()];

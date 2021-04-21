@@ -143,7 +143,7 @@ public class InitializationTests {
                 router.send(kvStoreNode, writeMsg.toString());
                 if (i %10 == 0) {
                     String target = partionable.get(r.nextInt(partionable.size()));
-                    router.partitionNode(target, true, true);
+                    router.partitionNode(target);
                     if (lastNode != null && !lastNode.equals(target)) {
                         router.healNode(target);
                     }

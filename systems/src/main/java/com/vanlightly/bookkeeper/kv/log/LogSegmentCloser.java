@@ -9,6 +9,7 @@ import com.vanlightly.bookkeeper.kv.bkclient.LedgerHandle;
 import com.vanlightly.bookkeeper.kv.bkclient.LedgerManager;
 import com.vanlightly.bookkeeper.kv.bkclient.RecoveryOp;
 import com.vanlightly.bookkeeper.metadata.LedgerMetadata;
+import com.vanlightly.bookkeeper.metadata.LedgerStatus;
 import com.vanlightly.bookkeeper.metadata.Versioned;
 
 import java.util.concurrent.CompletableFuture;
@@ -28,6 +29,10 @@ public class LogSegmentCloser extends LogClient {
         CompletableFuture<Void> future = new CompletableFuture<>();
 
         ledgerManager.getLedgerMetadata(position.getLedgerId())
+                .thenCompose((Versioned<LedgerMetadata> vlm) -> {
+                    vlm.getValue().setStatus(LedgerStatus.IN_RECOVERY);
+                    return ledgerManager.updateLedgerMetadata(vlm);
+                })
                 .thenApply((Versioned<LedgerMetadata> vlm) -> {
                     return new LedgerHandle(mapper, ledgerManager, messageSender,
                             logger, isCancelled, vlm);

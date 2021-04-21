@@ -85,7 +85,8 @@ public abstract class Node implements MessageSender {
     }
 
     public boolean handleTimeout() {
-        while (replyDeadlines.hasNext()) {
+        long now = System.currentTimeMillis();
+        while (replyDeadlines.hasNext(now)) {
             JsonNode msg = replyDeadlines.next();
 
             int msgId = msg.get(Fields.BODY).get(Fields.MSG_ID).asInt();
@@ -112,12 +113,13 @@ public abstract class Node implements MessageSender {
 
     public CompletableFuture<Void> delay(int delayMs) {
         CompletableFuture<Void> future = new CompletableFuture<>();
-        delayedFutures.add(delayMs, future);
+        delayedFutures.add(System.currentTimeMillis() + delayMs, future);
         return future;
     }
 
     public boolean resumeDelayedTask() {
-        if (delayedFutures.hasNext()) {
+        long now = System.currentTimeMillis();
+        if (delayedFutures.hasNext(now)) {
             CompletableFuture<Void> future = delayedFutures.next();
             future.complete(null);
             return true;
@@ -174,7 +176,7 @@ public abstract class Node implements MessageSender {
 
         if (replyFuture != null) {
             replyCallbacks.put(nextMsgId, replyFuture);
-            replyDeadlines.add(timeoutMs, msg);
+            replyDeadlines.add(System.currentTimeMillis() + timeoutMs, msg);
         }
 
         net.write(msg.toString());

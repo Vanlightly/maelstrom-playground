@@ -1,6 +1,7 @@
 package com.vanlightly.bookkeeper.util;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
 /*
     A collection that orders items according to a deadline.
@@ -13,9 +14,7 @@ public class DeadlineCollection<T> {
         this.data = new TreeMap<>();
     }
 
-    public void add(int deadlineMs, T t) {
-        long deadline = System.currentTimeMillis() + deadlineMs;
-
+    public void add(long deadline, T t) {
         data.compute(deadline, (k, v) -> {
             if (v == null) {
                 v =  new ArrayDeque<>();
@@ -25,13 +24,13 @@ public class DeadlineCollection<T> {
         });
     }
 
-    public boolean hasNext() {
+    public boolean hasNext(long deadline) {
         if (data.isEmpty()) {
             return false;
         }
 
         Long firstKey = data.firstKey();
-        return firstKey != null && firstKey < System.currentTimeMillis();
+        return firstKey != null && firstKey <= deadline;
     }
 
     public T next() {
@@ -43,5 +42,15 @@ public class DeadlineCollection<T> {
         }
 
         return item;
+    }
+
+    public List<T> getAll() {
+        return data.entrySet().stream()
+                .flatMap(x -> x.getValue().stream())
+                .collect(Collectors.toList());
+    }
+
+    public void clear() {
+        data.clear();
     }
 }

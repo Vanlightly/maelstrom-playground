@@ -20,6 +20,7 @@ public class PendingAddOp {
 
     MessageSender messageSender;
     LedgerHandle lh;
+    boolean isRecoveryAdd;
     CompletableFuture<Entry> callerFuture;
     AtomicBoolean isCancelled;
     boolean aborted;
@@ -32,6 +33,7 @@ public class PendingAddOp {
                         int writeQuorum,
                         int ackQuorum,
                         LedgerHandle lh,
+                        boolean isRecoveryAdd,
                         CompletableFuture<Entry> callerFuture,
                         AtomicBoolean isCancelled) {
         this.mapper = mapper;
@@ -43,6 +45,7 @@ public class PendingAddOp {
         this.ackQuorum = ackQuorum;
         this.successAdds = new HashSet<>();
         this.lh = lh;
+        this.isRecoveryAdd = isRecoveryAdd;
         this.callerFuture = callerFuture;
         this.isCancelled = isCancelled;
     }
@@ -59,6 +62,7 @@ public class PendingAddOp {
         body.put(Fields.L.ENTRY_ID, entry.getEntryId());
         body.put(Fields.L.VALUE, entry.getValue());
         body.put(Fields.L.LAC, lh.getLastAddConfirmed());
+        body.put(Fields.L.RECOVERY, isRecoveryAdd);
 
         String bookieId = ensemble.get(bookieIndex);
         messageSender.sendRequest(bookieId, Commands.Bookie.ADD_ENTRY, body)
