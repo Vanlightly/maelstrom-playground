@@ -9,16 +9,25 @@ import java.util.concurrent.ExecutionException;
 
 public class StdErrLogger implements Logger {
 
+    public static final int DEBUG = 0;
+    public static final int INFO = 1;
+    public static final int ERROR = 2;
+    public static int LogLevel = ERROR;
+
     @Override
     public void logDebug(String text) {
-        System.err.println(Thread.currentThread().getName() + " DEBUG: " + text);
-        System.err.flush();
+        if (LogLevel == DEBUG) {
+            System.err.println(Thread.currentThread().getName() + " DEBUG: " + text);
+            System.err.flush();
+        }
     }
 
     @Override
     public void logInfo(String text) {
-        System.err.println(Thread.currentThread().getName() + " INFO: " + text);
-        System.err.flush();
+        if (LogLevel <= INFO) {
+            System.err.println(Thread.currentThread().getName() + " INFO: " + text);
+            System.err.flush();
+        }
     }
 
     @Override
@@ -43,12 +52,6 @@ public class StdErrLogger implements Logger {
         }
 
         System.err.flush();
-    }
-
-    @Override
-    public void logBadReturnCode(String rc, String command, JsonNode msg) {
-        logError("Unexpected return code " + rc + " in reply to "
-                + command + " " + " in message: " + msg.toString());
     }
 
     @Override

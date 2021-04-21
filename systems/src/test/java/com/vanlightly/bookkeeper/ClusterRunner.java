@@ -88,6 +88,7 @@ public class ClusterRunner {
     }
 
     public void initialize() {
+        StdErrLogger.LogLevel = StdErrLogger.DEBUG;
         Node.BookieCount = bookies;
         for (int n = 1; n <= nodeCount; n++) {
             String nodeId = "n" + n;
