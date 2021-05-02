@@ -105,7 +105,8 @@ public class LogReader extends LogClient {
                 || longPoll()
                 || readUpToLac()
                 || reachedEndOfLedger()
-                || updateCachedLedgerMetadata();
+                || updateCachedLedgerMetadata()
+                || isInIllegalState();
     }
 
     private boolean openNextLedger() {
@@ -196,6 +197,8 @@ public class LogReader extends LogClient {
                             // update the cursor to indicate we are in a new ledger that has not
                             // yet been read from
                             cursorUpdater.accept(new Position(readHandle.getLedgerId(), -1L), null);
+                        } else {
+                            readHandle.setLastAddConfirmed(entryId);
                         }
                     } else if (isError(t)) {
                         logger.logError("Unable to open ledger metadata for next ledger", t);
@@ -314,32 +317,37 @@ public class LogReader extends LogClient {
                     .thenApply(this::checkForCancellation)
                     .thenAccept((Result<Entry> lacResult) -> {
                         if (!sm.isInState(stateCtr)) {
-                            logger.logDebug("READER: ignoring stale long poll result");
+                            logger.logDebug("ignoring stale long poll result");
                             return;
                         }
 
                         if (lacResult.getCode().equals(ReturnCodes.OK)) {
-                            logger.logDebug("READER: Long poll read lac " + lacResult.getData());
+                            logger.logDebug("Long poll read lac " + lacResult.getData());
                             long latestLac = lacResult.getData().getLac();
 
                             if (latestLac > previousLac && lacResult.getData().getValue() != null) {
-                                logger.logDebug("READER: Long poll has advanced the LAC from: "
+                                logger.logDebug("Long poll has advanced the LAC from: "
                                         + previousLac + " to: " + latestLac);
                                 updateCursor(lacResult.getData());
                             } else if (lacResult.getData().getLac() == previousLac) {
                                 // the LAC has not advanced
 
                                 if (lm().getStatus() == LedgerStatus.CLOSED) {
-                                    logger.logDebug("READER: Already reached end of ledger");
-                                    sm.changeState(State.NO_LEDGER);
+                                    if (lacResult.getData().getEntryId() == lm().getLastEntryId()) {
+                                        logger.logDebug("Ledger closed and have reached the end of the ledger");
+                                        sm.changeState(State.NO_LEDGER);
+                                    } else {
+                                        logger.logDebug("Ledger closed, switching to regular reads");
+                                        sm.changeState(State.IDLE);
+                                    }
                                 } else {
-                                    logger.logDebug("READER: No entries to read right now");
+                                    logger.logDebug("No entries to read right now");
                                 }
                             } else {
-                                logger.logDebug("READER: ignoring stale long poll result");
+                                logger.logDebug("ignoring stale long poll result");
                             }
                         } else {
-                            logger.logDebug("READER: Long poll non-success result. Code=" + lacResult.getCode());
+                            logger.logDebug("Long poll non-success result. Code=" + lacResult.getCode());
                         }
                     })
                     .whenComplete((Void v, Throwable t) -> {
@@ -359,7 +367,7 @@ public class LogReader extends LogClient {
 
     private boolean readUpToLac() {
         if (sm.state == State.IDLE
-                && (cursorView.get().getEntryId() < readHandle.getLastAddConfirmed()
+                && ((!ledgerIsClosed() && cursorView.get().getEntryId() < readHandle.getLastAddConfirmed())
                     || (ledgerIsClosed() && cursorView.get().getEntryId() < lm().getLastEntryId()))) {
             Position lastPositionRead = cursorView.get();
             final int stateCtr = sm.changeState(State.READING);
@@ -396,11 +404,11 @@ public class LogReader extends LogClient {
             logger.logDebug("Ignoring read request due to state change");
             return CompletableFuture.completedFuture(prev);
         } else if (ledgerIsClosed() && prev.getEntryId() == lm().getLastEntryId()) {
-            logger.logDebug("READER: Reached end of the ledger");
+            logger.logDebug("Reached end of closed ledger: " + lm().getLedgerId());
             prev.setEndOfLedger(true);
             return CompletableFuture.completedFuture(prev);
-        } else if (readHandle.getLastAddConfirmed() == prev.getEntryId()) {
-            logger.logDebug("READER: Reached LAC");
+        } else if (!ledgerIsClosed() && prev.getEntryId() == readHandle.getLastAddConfirmed()) {
+            logger.logDebug("Reached LAC of open ledger: " + lm().getLedgerId());
             // we can't safely read any further
             return CompletableFuture.completedFuture(prev);
         }
@@ -416,20 +424,30 @@ public class LogReader extends LogClient {
                             logger.logError("Entry read has no value: " + result.getData());
                         }
 
-                        logger.logDebug("READER: Read entry success: " + result.getData());
+                        logger.logDebug("Read entry success: " + result.getData());
                         Position pos = updateCursor(result.getData());
                         return readNext(pos, stateCtr);
                     } else if (result.getCode().equals(ReturnCodes.Bookie.NO_SUCH_ENTRY)
                             || result.getCode().equals(ReturnCodes.Bookie.NO_SUCH_LEDGER)) {
-                        logger.logError("READER: Entry may be lost. Have not reached LAC but all bookies report negatively.");
+                        logger.logError("Entry may be lost. Have not reached LAC but all bookies report negatively.");
                         // we don't advance
                         return CompletableFuture.completedFuture(prev);
                     } else {
-                        logger.logDebug("READER: Read inconclusive. Bookies may be unavailable.");
+                        logger.logDebug("Read inconclusive. Bookies may be unavailable.");
                         // we don't advance
                         return CompletableFuture.completedFuture(prev);
                     }
                 });
+    }
+
+    private boolean isInIllegalState() {
+        if (sm.state == State.IDLE) {
+            logger.logInvariantViolation("Cannot be in IDLE state without matching action", "TEMP");
+            printState();
+            throw new InvariantViolationException("Cannot be in IDLE state without matching action");
+        } else {
+            return false;
+        }
     }
 
     private Position updateCursor(Entry entry) {
@@ -498,7 +516,6 @@ public class LogReader extends LogClient {
         }
 
         public int changeState(State rState) {
-//            logger.logInfo("Reader state change. From: " + state + " to: " + rState);
             state = rState;
             return stateCounter.incrementAndGet();
         }
