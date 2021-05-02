@@ -7,6 +7,7 @@ import com.vanlightly.bookkeeper.*;
 import com.vanlightly.bookkeeper.util.InvariantViolationException;
 import com.vanlightly.bookkeeper.util.LogManager;
 import com.vanlightly.bookkeeper.util.Logger;
+import com.vanlightly.bookkeeper.util.MsgMapping;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -14,22 +15,21 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class PendingAddOp {
     private Logger logger = LogManager.getLogger(this.getClass().getName());
-    ObjectMapper mapper;
-    Entry entry;
-    Set<Integer> successAdds;
-    List<String> ensemble;
-    int writeQuorum;
-    int ackQuorum;
+    private ObjectMapper mapper = MsgMapping.getMapper();
+    private Entry entry;
+    private Set<Integer> successAdds;
+    private List<String> ensemble;
+    private int writeQuorum;
+    private int ackQuorum;
 
-    MessageSender messageSender;
-    LedgerWriteHandle lh;
-    boolean isRecoveryAdd;
-    CompletableFuture<Entry> callerFuture;
-    AtomicBoolean isCancelled;
-    boolean aborted;
+    private MessageSender messageSender;
+    private LedgerWriteHandle lh;
+    private boolean isRecoveryAdd;
+    private CompletableFuture<Entry> callerFuture;
+    private AtomicBoolean isCancelled;
+    private boolean aborted;
 
-    public PendingAddOp(ObjectMapper mapper,
-                        MessageSender messageSender,
+    public PendingAddOp(MessageSender messageSender,
                         Entry entry,
                         List<String> ensemble,
                         int writeQuorum,
@@ -38,7 +38,6 @@ public class PendingAddOp {
                         boolean isRecoveryAdd,
                         CompletableFuture<Entry> callerFuture,
                         AtomicBoolean isCancelled) {
-        this.mapper = mapper;
         this.messageSender = messageSender;
         this.entry = entry;
         this.ensemble = ensemble;

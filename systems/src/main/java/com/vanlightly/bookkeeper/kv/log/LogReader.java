@@ -46,13 +46,12 @@ public class LogReader extends LogClient {
     private long upToLedger;
 
     public LogReader(ManagerBuilder builder,
-                     ObjectMapper mapper,
                      MessageSender messageSender,
                      BiConsumer<Position, Op> cursorUpdater,
                      Supplier<Position> cursorView,
                      boolean isCatchUpReader,
                      long upToLedger) {
-        super(builder, mapper, messageSender, cursorUpdater);
+        super(builder, messageSender, cursorUpdater);
 
         this.lastCheckedMetadata = Instant.now().minus(1, ChronoUnit.DAYS);
         this.pendingMetadata = false;
@@ -176,10 +175,7 @@ public class LogReader extends LogClient {
                 .thenApply(this::checkForCancellation)
                 .whenComplete((Versioned<LedgerMetadata> vlm, Throwable t) -> {
                     if (t == null) {
-                        LedgerReadHandle nextLrh = new LedgerReadHandle(mapper,
-                                ledgerManager,
-                                messageSender,
-                                vlm);
+                        LedgerReadHandle nextLrh = new LedgerReadHandle(ledgerManager, messageSender, vlm);
                         if (vlm.getValue().getStatus().equals(LedgerStatus.CLOSED)) {
                             nextLrh.setLastAddConfirmed(vlm.getValue().getLastEntryId());
                         }

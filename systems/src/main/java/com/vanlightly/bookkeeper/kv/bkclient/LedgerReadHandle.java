@@ -10,6 +10,7 @@ import com.vanlightly.bookkeeper.metadata.Versioned;
 import com.vanlightly.bookkeeper.util.Futures;
 import com.vanlightly.bookkeeper.util.LogManager;
 import com.vanlightly.bookkeeper.util.Logger;
+import com.vanlightly.bookkeeper.util.MsgMapping;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -17,7 +18,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class LedgerReadHandle {
     private Logger logger = LogManager.getLogger(this.getClass().getName());
-    private ObjectMapper mapper;
+    private ObjectMapper mapper = MsgMapping.getMapper();
     private MessageSender messageSender;
     private AtomicBoolean isCancelled;
 
@@ -25,11 +26,9 @@ public class LedgerReadHandle {
     long lastAddConfirmed;
     LedgerManager ledgerManager;
 
-    public LedgerReadHandle(ObjectMapper mapper,
-                        LedgerManager ledgerManager,
-                        MessageSender messageSender,
-                        Versioned<LedgerMetadata> versionedMetadata) {
-        this.mapper = mapper;
+    public LedgerReadHandle(LedgerManager ledgerManager,
+                            MessageSender messageSender,
+                            Versioned<LedgerMetadata> versionedMetadata) {
         this.ledgerManager = ledgerManager;
         this.messageSender = messageSender;
         // must be a copy as sharing between handles during recovery can cause inconsistency

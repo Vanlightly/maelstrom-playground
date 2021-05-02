@@ -34,10 +34,9 @@ public class LogWriter extends LogClient {
     private Versioned<List<Long>> cachedLedgerList;
 
     public LogWriter(ManagerBuilder managerBuilder,
-                     ObjectMapper mapper,
                      MessageSender messageSender,
                      BiConsumer<Position, Op> cursorUpdater) {
-        super(managerBuilder, mapper, messageSender, cursorUpdater);
+        super(managerBuilder, messageSender, cursorUpdater);
         this.cachedLedgerList = new Versioned<>(new ArrayList<>(), -1);
     }
 
@@ -113,7 +112,7 @@ public class LogWriter extends LogClient {
                 .thenApply(this::checkForCancellation)
                 .whenComplete((Versioned<LedgerMetadata> vlm, Throwable t) -> {
                     if (t == null) {
-                        writeHandle = new LedgerWriteHandle(mapper, ledgerManager, messageSender, vlm);
+                        writeHandle = new LedgerWriteHandle(ledgerManager, messageSender, vlm);
                         logger.logDebug("Created new ledger handle for writer");
                         writeHandle.printState();
                         future.complete(null);

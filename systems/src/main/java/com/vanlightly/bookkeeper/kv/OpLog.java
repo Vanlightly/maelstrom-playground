@@ -98,7 +98,7 @@ public class OpLog {
             logger.logError("Inconsistent committed index. Is: " + commitIndex
                 + " but should be: " + (log.size()-1));
         } else if (idSource != log.size()-1) {
-            logger.logError("Inconsistent isSource. Is: " + idSource
+            logger.logError("Inconsistent idSource. Is: " + idSource
                     + " but should be: " + (log.size() - 1));
         }
         //checkLocalInvariants();

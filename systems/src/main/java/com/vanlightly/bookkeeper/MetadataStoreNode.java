@@ -36,9 +36,8 @@ public class MetadataStoreNode extends Node {
 
     public MetadataStoreNode(String nodeId,
                              NetworkIO net,
-                             ObjectMapper mapper,
                              ManagerBuilder builder) {
-        super(nodeId, false, net, mapper, builder);
+        super(nodeId, false, net, builder);
         this.sessions = new HashMap<>();
         this.ledgerList = new Versioned<>(new ArrayList<>(), 0);
         this.availableBookies = new HashSet<>();

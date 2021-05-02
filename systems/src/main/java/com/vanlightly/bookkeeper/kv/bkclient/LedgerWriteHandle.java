@@ -5,10 +5,7 @@ import com.vanlightly.bookkeeper.*;
 import com.vanlightly.bookkeeper.metadata.LedgerMetadata;
 import com.vanlightly.bookkeeper.metadata.LedgerStatus;
 import com.vanlightly.bookkeeper.metadata.Versioned;
-import com.vanlightly.bookkeeper.util.Futures;
-import com.vanlightly.bookkeeper.util.InvariantViolationException;
-import com.vanlightly.bookkeeper.util.LogManager;
-import com.vanlightly.bookkeeper.util.Logger;
+import com.vanlightly.bookkeeper.util.*;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -16,7 +13,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class LedgerWriteHandle {
     private Logger logger = LogManager.getLogger(this.getClass().getName());
-    private ObjectMapper mapper;
+    private ObjectMapper mapper = MsgMapping.getMapper();
     private MessageSender messageSender;
     private AtomicBoolean isCancelled;
 
@@ -32,11 +29,9 @@ public class LedgerWriteHandle {
     boolean pendingClose;
     List<CompletableFuture<Versioned<LedgerMetadata>>> closeFutures;
 
-    public LedgerWriteHandle(ObjectMapper mapper,
-                        LedgerManager ledgerManager,
-                        MessageSender messageSender,
-                        Versioned<LedgerMetadata> versionedMetadata) {
-        this.mapper = mapper;
+    public LedgerWriteHandle(LedgerManager ledgerManager,
+                             MessageSender messageSender,
+                             Versioned<LedgerMetadata> versionedMetadata) {
         this.ledgerManager = ledgerManager;
         this.messageSender = messageSender;
         this.versionedMetadata = versionedMetadata;
@@ -114,7 +109,7 @@ public class LedgerWriteHandle {
 
         lastAddPushed++;
         Entry entry = new Entry(lm().getLedgerId(), lastAddPushed, value);
-        PendingAddOp addOp = new PendingAddOp(mapper,
+        PendingAddOp addOp = new PendingAddOp(
                 messageSender,
                 entry,
                 lm().getCurrentEnsemble(),

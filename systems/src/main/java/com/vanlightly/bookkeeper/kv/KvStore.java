@@ -6,17 +6,17 @@ import com.vanlightly.bookkeeper.Constants;
 import com.vanlightly.bookkeeper.Fields;
 import com.vanlightly.bookkeeper.util.LogManager;
 import com.vanlightly.bookkeeper.util.Logger;
+import com.vanlightly.bookkeeper.util.MsgMapping;
 
 import java.util.HashMap;
 import java.util.Map;
 
 public class KvStore {
     private Logger logger = LogManager.getLogger(this.getClass().getName());
-    Map<String, Integer> store;
-    ObjectMapper mapper;
+    private ObjectMapper mapper = MsgMapping.getMapper();
+    private Map<String, Integer> store;
 
-    public KvStore(ObjectMapper mapper) {
-        this.mapper = mapper;
+    public KvStore() {
         this.store = new HashMap<>();
     }
 

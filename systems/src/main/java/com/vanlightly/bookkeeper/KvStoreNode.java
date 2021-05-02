@@ -43,12 +43,11 @@ public class KvStoreNode extends Node {
 
     public KvStoreNode(String nodeId,
                        NetworkIO net,
-                       ObjectMapper mapper,
                        ManagerBuilder builder) {
-        super(nodeId, true, net, mapper, builder);
+        super(nodeId, true, net, builder);
         this.metadataManager = builder.buildMetadataManager(this, isCancelled);
         this.lastUpdatedMetadata = Instant.now().minus(1, ChronoUnit.DAYS);
-        this.kvStore = new KvStore(mapper);
+        this.kvStore = new KvStore();
         this.opLog = new OpLog();
         this.state = new KvStoreState();
         this.cursor = new Position(-1L, -1L);
@@ -604,14 +603,12 @@ public class KvStoreNode extends Node {
 
     private LogWriter newLogWriter() {
         return new LogWriter(builder,
-                mapper,
                 this,
                 (position, op) -> advancedCommittedIndex(position, op));
     }
 
     private LogReader newLogReader() {
         return new LogReader(builder,
-                mapper,
                 this,
                 (position, op) -> appendOp(position, op),
                 () -> cursor,
@@ -621,7 +618,6 @@ public class KvStoreNode extends Node {
 
     private LogReader newCatchupLogReader(long recoveredLedgerId) {
         return new LogReader(builder,
-                mapper,
                 this,
                 (position, op) -> appendOp(position, op),
                 () -> cursor,
@@ -630,9 +626,7 @@ public class KvStoreNode extends Node {
     }
 
     private LogSegmentCloser newLogSegmentCloser() {
-        return new LogSegmentCloser(builder,
-                mapper,
-                this);
+        return new LogSegmentCloser(builder,this);
     }
 
     // called by writers to advance the committed index

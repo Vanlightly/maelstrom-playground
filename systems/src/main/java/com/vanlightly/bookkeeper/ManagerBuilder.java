@@ -17,29 +17,24 @@ public interface ManagerBuilder {
 }
 
 class ManagerBuilderImpl implements ManagerBuilder {
-    ObjectMapper mapper;
     SessionManager sessionManager;
-
-    public ManagerBuilderImpl(ObjectMapper mapper) {
-        this.mapper = mapper;
-    }
 
     @Override
     public SessionManager buildSessionManager(Long keepAliveMs,
                                               MessageSender messageSender) {
-        sessionManager = new SessionManager(keepAliveMs, mapper, messageSender);
+        sessionManager = new SessionManager(keepAliveMs, messageSender);
         return sessionManager;
     }
 
     @Override
     public LedgerManager buildLedgerManager(MessageSender messageSender,
                                             AtomicBoolean isCancelled) {
-        return new LedgerManager(mapper, sessionManager, messageSender, isCancelled);
+        return new LedgerManager(sessionManager, messageSender, isCancelled);
     }
 
     @Override
     public MetadataManager buildMetadataManager(MessageSender messageSender,
                                                 AtomicBoolean isCancelled) {
-        return new MetadataManager(mapper, sessionManager, messageSender, isCancelled);
+        return new MetadataManager(sessionManager, messageSender, isCancelled);
     }
 };

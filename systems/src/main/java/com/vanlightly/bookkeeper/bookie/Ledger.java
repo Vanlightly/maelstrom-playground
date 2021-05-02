@@ -65,16 +65,6 @@ public class Ledger {
 
     public void fenceLedger() {
         isFenced = true;
-
-        for (LongPollLacRead lpRead : lacLongPollReadsByLac.getAll()) {
-            if (lpRead.isActive()) {
-                lpRead.getFuture().completeExceptionally(
-                        new BkException("Ledger fenced", ReturnCodes.Bookie.FENCED));
-            }
-        }
-
-        lacLongPollReadsByLac.clear();
-        lacLongPollReadsByTimeout.clear();
     }
 
     public long getLac() {

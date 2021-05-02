@@ -104,8 +104,8 @@ public class StdErrLogger implements Logger {
     private void print(String level, String text) {
         System.err.println(Thread.currentThread().getName()
                 + " : " + getTime()
-                + " : " + component
                 + " : " + level
+                + " : " + component
                 + " : " + text);
     }
 

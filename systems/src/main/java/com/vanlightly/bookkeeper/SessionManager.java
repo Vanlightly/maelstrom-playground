@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.vanlightly.bookkeeper.util.LogManager;
 import com.vanlightly.bookkeeper.util.Logger;
+import com.vanlightly.bookkeeper.util.MsgMapping;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -16,7 +17,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 public class SessionManager implements RequestHandler {
     private Logger logger = LogManager.getLogger(this.getClass().getName());
-    private ObjectMapper mapper;
+    private ObjectMapper mapper = MsgMapping.getMapper();
     private MessageSender messageSender;
 
     private long keepAliveMs;
@@ -31,10 +32,8 @@ public class SessionManager implements RequestHandler {
     );
 
     public SessionManager(Long keepAliveMs,
-                          ObjectMapper mapper,
                           MessageSender messageSender) {
         this.keepAliveMs = keepAliveMs;
-        this.mapper = mapper;
         this.messageSender = messageSender;
 
         this.pendingSessionId = new AtomicBoolean();

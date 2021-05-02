@@ -11,6 +11,7 @@ import com.vanlightly.bookkeeper.metadata.Versioned;
 import com.vanlightly.bookkeeper.util.Futures;
 import com.vanlightly.bookkeeper.util.LogManager;
 import com.vanlightly.bookkeeper.util.Logger;
+import com.vanlightly.bookkeeper.util.MsgMapping;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -18,16 +19,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class LedgerManager {
     private Logger logger = LogManager.getLogger(this.getClass().getName());
-    private ObjectMapper mapper;
+    private ObjectMapper mapper = MsgMapping.getMapper();
     private SessionManager sessionManager;
     private MessageSender messageSender;
     private AtomicBoolean isCancelled;
 
-    public LedgerManager(ObjectMapper mapper,
-                         SessionManager sessionManager,
+    public LedgerManager(SessionManager sessionManager,
                          MessageSender messageSender,
                          AtomicBoolean isCancelled) {
-        this.mapper = mapper;
         this.sessionManager = sessionManager;
         this.messageSender = messageSender;
         this.isCancelled = isCancelled;

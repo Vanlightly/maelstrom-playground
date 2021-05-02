@@ -13,13 +13,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class RecoveryOp {
     private Logger logger = LogManager.getLogger(this.getClass().getName());
-    LedgerReadHandle readHandle;
-    LedgerWriteHandle writeHandle;
-    int readCount;
-    int writeCount;
-    boolean readsComplete;
-    CompletableFuture<Position> callerFuture;
-    AtomicBoolean isCancelled;
+    private LedgerReadHandle readHandle;
+    private LedgerWriteHandle writeHandle;
+    private int readCount;
+    private int writeCount;
+    private boolean readsComplete;
+    private CompletableFuture<Position> callerFuture;
+    private AtomicBoolean isCancelled;
 
     public RecoveryOp(LedgerReadHandle lrh,
                       LedgerWriteHandle lwh,
@@ -35,7 +35,7 @@ public class RecoveryOp {
     }
 
     public void begin() {
-        logger.logDebug("RECOVERY: Starting recovery op");
+        logger.logDebug("Starting recovery op");
         readHandle.readLacWithFencing()
                 .thenApply(this::checkForCancellation)
                 .thenCompose((Result<Entry> lacResult) -> {
@@ -60,10 +60,10 @@ public class RecoveryOp {
                         readHandle.setLastAddConfirmed(lac);
                         writeHandle.setLastAddConfirmed(lac);
                         writeHandle.setLastAddPushed(lac);
-                        logger.logDebug("RECOVERY: Starting recovery with LAC " + lac);
+                        logger.logDebug("Starting recovery with LAC " + lac);
                         return readNext(new Position(readHandle.getLedgerId(), lac));
                     } else {
-                        return Futures.failedFuture(new BkException("RECOVERY: Couldn't fence enough bookies to progress", lacResult.getCode()));
+                        return Futures.failedFuture(new BkException("Couldn't fence enough bookies to progress", lacResult.getCode()));
                     }
                 })
                 .whenComplete((Position pos, Throwable t1) -> {
@@ -77,17 +77,17 @@ public class RecoveryOp {
                         // some write results pending, but if not then close the ledger now
                         readsComplete = true;
                         if (readCount == writeCount) {
-                            logger.logDebug("RECOVERY: Reads and writes complete.");
+                            logger.logDebug("Reads and writes complete.");
                             closeLedger();
                         } else {
-                            logger.logDebug("RECOVERY: Reads complete. Waiting for writes to complete");
+                            logger.logDebug("Reads complete. Waiting for writes to complete");
                         }
                     }
                 });
     }
 
     private CompletableFuture<Position> readNext(Position prev) {
-        logger.logDebug("RECOVERY: Last read: " + prev);
+        logger.logDebug("Last read: " + prev);
         return readHandle.recoveryRead(prev.getEntryId() + 1)
                 .thenCompose((Result<Entry> result) -> {
                     if (isCancelled.get()) {
@@ -97,7 +97,7 @@ public class RecoveryOp {
                         if (result.getCode().equals(ReturnCodes.OK)) {
                             readCount++;
 
-                            logger.logDebug("RECOVERY: Read " + readCount + " successful " + result.getData() +
+                            logger.logDebug("Read " + readCount + " successful " + result.getData() +
                                     ". Writing entry back to ensemble.");
 
                             // write back the entry to the ledger to ensure it reaches write quorum
@@ -107,7 +107,7 @@ public class RecoveryOp {
                                             if (t2 != null) {
                                                 // the write failed, so we need to abort the recovery op
                                                 // and all pending actions of the ledger handle
-                                                logger.logError("RECOVERY: Add failed. Cancelling recovery op.", t2);
+                                                logger.logError("Add failed. Cancelling recovery op.", t2);
                                                 isCancelled.set(true);
                                                 readHandle.cancel();
                                                 writeHandle.cancel();
@@ -118,10 +118,10 @@ public class RecoveryOp {
                                                 // write then close the ledger
                                                 writeCount++;
 
-                                                logger.logDebug("RECOVERY: Write " + readCount + " successful " + result.getData());
+                                                logger.logDebug("Write " + readCount + " successful " + result.getData());
 
                                                 if (readsComplete && readCount == writeCount) {
-                                                    logger.logDebug("RECOVERY: Writes complete");
+                                                    logger.logDebug("Writes complete");
                                                     closeLedger();
                                                 }
                                             }
@@ -133,13 +133,13 @@ public class RecoveryOp {
                                     result.getData().getEntryId());
                             return readNext(currPos);
                         } else if (result.getCode().equals(ReturnCodes.Ledger.NO_QUORUM)) {
-                            logger.logDebug("RECOVERY: Read " + readCount
+                            logger.logDebug("Read " + readCount
                                     + " negative. Last committed entry is: " + prev);
                             // the previous read was the last good entry
                             return CompletableFuture.completedFuture(prev);
                         } else {
                             // we don't know if the current entry exists or not
-                            logger.logDebug("RECOVERY: Read " + readCount + " unknown, cannot make progress. "
+                            logger.logDebug("Read " + readCount + " unknown, cannot make progress. "
                                     + "Last successful entry is: " + prev);
                             throw new BkException("Too many unknown responses", ReturnCodes.Ledger.UNKNOWN);
                         }
@@ -148,16 +148,16 @@ public class RecoveryOp {
     }
 
     private void closeLedger() {
-        logger.logDebug("RECOVERY: Closing the ledger");
+        logger.logDebug("Closing the ledger");
         writeHandle.close()
             .whenComplete((Versioned<LedgerMetadata> vlm, Throwable t2) -> {
                 if (isCancelled.get()) {
                     completeExceptionally(new OperationCancelledException());
                 } else if (t2 != null) {
-                    logger.logError("RECOVERY: Failed to close the ledger", t2);
+                    logger.logError("Failed to close the ledger", t2);
                     completeExceptionally(t2);
                 } else {
-                    logger.logDebug("RECOVERY: Ledger closed");
+                    logger.logDebug("Ledger closed");
                     complete();
                 }
             });

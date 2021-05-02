@@ -81,7 +81,7 @@ public class NodeRunner {
                 String type = msg.get(Fields.BODY).get(Fields.MSG_TYPE).asText();
 
                 if (type.equals("init")) {
-                    Node node = buildNode(msg, net, mapper);
+                    Node node = buildNode(msg, net);
                     node.initialize(msg);
                     return node;
                 } else {
@@ -95,23 +95,23 @@ public class NodeRunner {
         }
     }
 
-    private Node buildNode(JsonNode msg, NetworkIO net, ObjectMapper mapper) {
+    private Node buildNode(JsonNode msg, NetworkIO net) {
         String nodeId = msg.get(Fields.BODY).get("node_id").asText();
         NodeType nodeType = Node.determineType(nodeId);
 
         Node node;
 
         if (nodeType == NodeType.MetadataStore) {
-            node = new MetadataStoreNode(nodeId, net, mapper, null);
+            node = new MetadataStoreNode(nodeId, net, null);
             System.err.println("Built metadata store node " + nodeId);
         } else {
-            ManagerBuilder builder = new ManagerBuilderImpl(mapper);
+            ManagerBuilder builder = new ManagerBuilderImpl();
 
             if (nodeType == NodeType.KvStore) {
-                node = new KvStoreNode(nodeId, net, mapper, builder);
+                node = new KvStoreNode(nodeId, net, builder);
                 System.err.println("Built bk client node " + nodeId);
             } else {
-                node = new BookieNode(nodeId, net, mapper, builder);
+                node = new BookieNode(nodeId, net, builder);
                 System.err.println("Built bookie node " + nodeId);
             }
         }

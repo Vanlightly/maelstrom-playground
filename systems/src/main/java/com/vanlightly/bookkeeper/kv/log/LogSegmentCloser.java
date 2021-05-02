@@ -1,6 +1,5 @@
 package com.vanlightly.bookkeeper.kv.log;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vanlightly.bookkeeper.util.LogManager;
 import com.vanlightly.bookkeeper.util.Logger;
 import com.vanlightly.bookkeeper.ManagerBuilder;
@@ -20,9 +19,8 @@ public class LogSegmentCloser extends LogClient {
     private RecoveryOp recoveryOp;
 
     public LogSegmentCloser(ManagerBuilder builder,
-                            ObjectMapper mapper,
                             MessageSender messageSender) {
-        super(builder, mapper, messageSender, null);
+        super(builder, messageSender, null);
     }
 
     @Override
@@ -61,12 +59,9 @@ public class LogSegmentCloser extends LogClient {
                                     vlm.getValue().setStatus(LedgerStatus.IN_RECOVERY);
                                     ledgerManager.updateLedgerMetadata(vlm)
                                             .thenAccept((Versioned<LedgerMetadata> vlm2) -> {
-                                                readHandle = new LedgerReadHandle(mapper, ledgerManager,
-                                                        messageSender, vlm2);
-                                                writeHandle = new LedgerWriteHandle(mapper, ledgerManager,
-                                                        messageSender, vlm2);
-                                                recoveryOp = new RecoveryOp(readHandle,
-                                                        writeHandle, future, isCancelled);
+                                                readHandle = new LedgerReadHandle(ledgerManager, messageSender, vlm2);
+                                                writeHandle = new LedgerWriteHandle(ledgerManager, messageSender, vlm2);
+                                                recoveryOp = new RecoveryOp(readHandle, writeHandle, future, isCancelled);
                                                 recoveryOp.begin();
                                             })
                                             .whenComplete((Void v, Throwable t) -> handleError(t, future));

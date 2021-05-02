@@ -6,6 +6,7 @@ import com.vanlightly.bookkeeper.kv.Op;
 import com.vanlightly.bookkeeper.kv.bkclient.LedgerManager;
 import com.vanlightly.bookkeeper.util.Futures;
 import com.vanlightly.bookkeeper.util.Logger;
+import com.vanlightly.bookkeeper.util.MsgMapping;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiConsumer;
@@ -17,20 +18,18 @@ import java.util.function.BiConsumer;
 public abstract class LogClient {
     protected MetadataManager metadataManager;
     protected LedgerManager ledgerManager;
-    protected ObjectMapper mapper;
+    protected ObjectMapper mapper = MsgMapping.getMapper();
     protected MessageSender messageSender;
     protected AtomicBoolean isCancelled;
 
     protected BiConsumer<Position, Op> cursorUpdater;
 
     public LogClient(ManagerBuilder managerBuilder,
-                     ObjectMapper mapper,
                      MessageSender messageSender,
                      BiConsumer<Position, Op> cursorUpdater) {
         this.isCancelled = new AtomicBoolean();
         this.metadataManager = managerBuilder.buildMetadataManager(messageSender, isCancelled);
         this.ledgerManager = managerBuilder.buildLedgerManager(messageSender, isCancelled);
-        this.mapper = mapper;
         this.messageSender = messageSender;
         this.cursorUpdater = cursorUpdater;
     }
