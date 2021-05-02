@@ -21,12 +21,14 @@ public class KvStoreState {
 
     public enum LeaderState {
         NONE,
-        NEED_CLOSE_SEGMENT,
-        CLOSING_SEGMENT,
-        NEED_CATCHUP_READER,
-        CATCHUP_READING,
-        NEED_WRITER,
-        STARTING_WRITER,
+        START_SEQ_1,
+        START_SEQ_2_CACHE_LEDGER_LIST,
+        START_SEQ_3_CLOSE_SEGMENT,
+        START_SEQ_4_SEGMENT_CLOSING,
+        START_SEQ_5_NEED_CATCHUP_READER,
+        START_SEQ_6_CATCHUP_READING,
+        START_SEQ_7_NEED_WRITER,
+        START_SEQ_8_STARTING_WRITER,
         CLOSING_WRITER,
         READY
     }

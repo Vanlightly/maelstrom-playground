@@ -105,6 +105,14 @@ public class LedgerMetadata {
     }
 
     @JsonIgnore
+    public List<String> getEnsembleFor(long entryId) {
+        if (entryId == -1L) {
+            return getCurrentEnsemble();
+        }
+        return ensembles.floorEntry(entryId).getValue();
+    }
+
+    @JsonIgnore
     public void replaceCurrentEnsemble(List<String> ensemble) {
         ensembles.put(ensembles.lastKey(), ensemble);
     }

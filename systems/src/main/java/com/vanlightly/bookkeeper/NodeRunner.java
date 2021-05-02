@@ -9,7 +9,7 @@ import com.vanlightly.bookkeeper.network.StdInOutNetwork;
 public class NodeRunner {
 
     public static void main(String[] args) {
-        StdErrLogger.LogLevel = StdErrLogger.ERROR;
+        StdErrLogger.LogLevel = StdErrLogger.DEBUG;
         NodeRunner nodeRunner = new NodeRunner();
         nodeRunner.run();
     }

@@ -278,6 +278,8 @@ public class MetadataStoreNode extends Node {
                 nextSessionId);
         sessions.put(nodeId, session);
 
+        logger.logDebug("New session established. Node: " + nodeId + " Session: " + nextSessionId);
+
         ObjectNode replyBody = mapper.createObjectNode();
         replyBody.put(Fields.SESSION_ID, nextSessionId);
         reply(msg, ReturnCodes.OK, replyBody);
@@ -357,17 +359,24 @@ public class MetadataStoreNode extends Node {
 
             Versioned<LedgerMetadata> vCurrentMd = ledgers.get(updatedMd.getLedgerId());
             if (vCurrentMd == null) {
+                logger.logDebug("Rejected ledger update due to NO_SUCH_LEDGER. Ledger: " + updatedMd.getLedgerId()
+                        + " from: " + msg.get(Fields.SOURCE).asText());
                 reply(msg, ReturnCodes.Metadata.NO_SUCH_LEDGER);
                 return;
             }
 
             if (vUpdatedMd.getVersion() != vCurrentMd.getVersion()) {
+                logger.logDebug("Rejected ledger update due to BAD_VERSION. Ledger: " + updatedMd.getLedgerId()
+                        + " from: " + msg.get(Fields.SOURCE).asText());
                 reply(msg, ReturnCodes.Metadata.BAD_VERSION);
                 return;
             }
 
             vUpdatedMd.incrementVersion();
             ledgers.put(updatedMd.getLedgerId(), vUpdatedMd);
+
+            logger.logDebug("Accepted ledger update. Ledger: " + updatedMd
+                    + " from: " + msg.get(Fields.SOURCE).asText());
 
             ObjectNode replyBody = mapper.createObjectNode();
             replyBody.put(Fields.SESSION_ID, session.getSessionId());
@@ -397,6 +406,9 @@ public class MetadataStoreNode extends Node {
             Versioned<LedgerMetadata> vLedgerMd = new Versioned<>(ledgerMd, 0);
             ledgers.put(ledgerMd.getLedgerId(), vLedgerMd);
 
+            logger.logDebug("Accepted ledger create. Ledger: " + ledgerMd
+                    + " from: " + msg.get(Fields.SOURCE).asText());
+
             ObjectNode res = mapper.createObjectNode();
             res.put(Fields.VERSION, 0);
             res.set(Fields.M.LEDGER_METADATA, mapper.valueToTree(ledgerMd));
@@ -417,6 +429,13 @@ public class MetadataStoreNode extends Node {
 
             if (ledgerList.getVersion() == version) {
                 ledgerList.incrementVersion();
+
+                logger.logDebug("Accepted ledger list update. versionFrom: " + version
+                        + " versionTo: " + ledgerList.getVersion()
+                        + " listFrom:" + ledgerList.getValue()
+                        + " listTo: " + updatedLedgerList
+                        + " from: " + msg.get(Fields.SOURCE).asText());
+
                 ledgerList.setValue(updatedLedgerList);
 
                 ObjectNode replyBody = mapper.createObjectNode();
@@ -424,6 +443,12 @@ public class MetadataStoreNode extends Node {
                 replyBody.set(Fields.KV.LEDGER_LIST, mapper.valueToTree(ledgerList.getValue()));
                 reply(msg, ReturnCodes.OK, replyBody);
             } else {
+                logger.logDebug("Rejected ledger list update. versionRejected: " + version
+                        + " versionCurrent: " + ledgerList.getVersion()
+                        + " listRejected:" + updatedLedgerList
+                        + " listCurrent: " + ledgerList.getValue()
+                        + " from: " + msg.get(Fields.SOURCE).asText());
+
                 replyBadVersion(msg);
             }
         }

@@ -89,8 +89,8 @@ public class ClusterRunner {
 
     public void initialize() {
         StdErrLogger.LogLevel = StdErrLogger.DEBUG;
-        Node.BookieCount = bookies;
-        for (int n = 1; n <= nodeCount; n++) {
+        Constants.Bookie.BookieCount = bookies;
+        for (int n = 0; n < nodeCount; n++) {
             String nodeId = "n" + n;
             router.addNode(nodeId);
             String init = "{\"dest\":\"" + nodeId + "\",\"body\":{\"type\":\"init\",\"node_id\":\"" + nodeId + "\",\"msg_id\":" + msgId + "},\"src\":\"c1\"}\n";
@@ -121,15 +121,11 @@ public class ClusterRunner {
             System.out.println("Write dropped. All KV Store nodes are partitioned");
         }
 
-        ObjectNode op = mapper.createObjectNode();
-        op.put(Fields.KV.Op.TYPE, Commands.Client.WRITE);
-        op.put(Fields.KV.Op.KEY, key);
-        op.put(Fields.KV.Op.VALUE, value);
-
         ObjectNode body = mapper.createObjectNode();
         body.put(Fields.MSG_TYPE, Constants.KvStore.Ops.WRITE);
         body.put(Fields.MSG_ID, msgId);
-        body.set(Fields.KV.OP, op);
+        body.put(Fields.KV.Op.KEY, key);
+        body.put(Fields.KV.Op.VALUE, value);
 
         ObjectNode writeMsg = mapper.createObjectNode();
         writeMsg.put(Fields.DEST, kvStoreNode);
@@ -148,12 +144,11 @@ public class ClusterRunner {
 
         ObjectNode op = mapper.createObjectNode();
         op.put(Fields.KV.Op.TYPE, Commands.Client.READ);
-        op.put(Fields.KV.Op.KEY, key);
 
         ObjectNode body = mapper.createObjectNode();
         body.put(Fields.MSG_TYPE, Constants.KvStore.Ops.READ);
         body.put(Fields.MSG_ID, msgId);
-        body.set(Fields.KV.OP, op);
+        body.put(Fields.KV.Op.KEY, key);
 
         ObjectNode writeMsg = mapper.createObjectNode();
         writeMsg.put(Fields.DEST, kvStoreNode);
@@ -170,16 +165,12 @@ public class ClusterRunner {
             System.out.println("CAS dropped. All KV Store nodes are partitioned");
         }
 
-        ObjectNode op = mapper.createObjectNode();
-        op.put(Fields.KV.Op.TYPE, Commands.Client.CAS);
-        op.put(Fields.KV.Op.KEY, key);
-        op.put(Fields.KV.Op.FROM, from);
-        op.put(Fields.KV.Op.TO, to);
-
         ObjectNode body = mapper.createObjectNode();
         body.put(Fields.MSG_TYPE, Constants.KvStore.Ops.CAS);
         body.put(Fields.MSG_ID, msgId);
-        body.set(Fields.KV.OP, op);
+        body.put(Fields.KV.Op.KEY, key);
+        body.put(Fields.KV.Op.FROM, from);
+        body.put(Fields.KV.Op.TO, to);
 
         ObjectNode writeMsg = mapper.createObjectNode();
         writeMsg.put(Fields.DEST, kvStoreNode);

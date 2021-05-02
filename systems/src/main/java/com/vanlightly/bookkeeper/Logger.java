@@ -9,4 +9,5 @@ public interface Logger {
     void logError(String text, Throwable e);
     void logReplyToTimedOutMsg(JsonNode msg);
     void logBadSession(JsonNode msg, long msgSessionId, long realSessionId);
+    void logInvariantViolation(String text, String invCode);
 }

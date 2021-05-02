@@ -81,6 +81,8 @@ public class MetadataManager {
     private CompletableFuture<Versioned<List<Long>>> doGetLedgerList() {
         CompletableFuture<Versioned<List<Long>>> future = new CompletableFuture<>();
 
+        logger.logDebug("Get ledger list");
+
         sessionManager.getSessionId()
                 .thenCompose((sessionId) -> {
                     ObjectNode body = mapper.createObjectNode();
@@ -90,6 +92,8 @@ public class MetadataManager {
                 .thenAccept((JsonNode msg) -> {
                     JsonNode body = msg.get(Fields.BODY);
                     String rc = body.get(Fields.RC).asText();
+
+                    logger.logDebug("Get ledger list response: " + rc);
 
                     switch (rc) {
                         case ReturnCodes.OK:

@@ -4,6 +4,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.vanlightly.bookkeeper.Logger;
 import com.vanlightly.bookkeeper.kv.bkclient.BkException;
 
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 
@@ -13,11 +16,12 @@ public class StdErrLogger implements Logger {
     public static final int INFO = 1;
     public static final int ERROR = 2;
     public static int LogLevel = ERROR;
+    private static DateTimeFormatter dtf = DateTimeFormatter.ofPattern("HH:mm:ss.SSS");
 
     @Override
     public void logDebug(String text) {
         if (LogLevel == DEBUG) {
-            System.err.println(Thread.currentThread().getName() + " DEBUG: " + text);
+            print("DEBUG", text);
             System.err.flush();
         }
     }
@@ -25,30 +29,46 @@ public class StdErrLogger implements Logger {
     @Override
     public void logInfo(String text) {
         if (LogLevel <= INFO) {
-            System.err.println(Thread.currentThread().getName() + " INFO: " + text);
+            print("INFO", text);
             System.err.flush();
         }
     }
 
     @Override
     public void logError(String text) {
-        System.err.println(Thread.currentThread().getName() + " ERROR: " + text);
+        print("ERROR", text);
+        System.err.flush();
+    }
+
+    @Override
+    public void logInvariantViolation(String text, String invCode) {
+        print("INVARIANT_VIOLATION", text + " INV_CODE: " + invCode);
         System.err.flush();
     }
 
     @Override
     public void logError(String text, Throwable t) {
+        t = unwrap(t);
+
         if (t == null) {
-            System.err.println(Thread.currentThread().getName() + " ERROR: " + text);
+            print("ERROR", text);
         } else if (t instanceof BkException) {
             BkException bke = (BkException)t;
-            System.err.println(Thread.currentThread().getName() + " ERROR: " + text
+            print(" ERROR", text
                     + " Code: " + bke.getCode()
                     + " Message: " + bke.getMessage());
-            bke.printStackTrace(System.err);
+//            bke.printStackTrace(System.err);
+        } else if (t instanceof MetadataException) {
+            MetadataException me = (MetadataException)t;
+            print(" ERROR", text
+                    + " Code: " + me.getCode()
+                    + " Message: " + me.getMessage());
+//            me.printStackTrace(System.err);
+        } else if (t instanceof OperationCancelledException){
+            print("INFO", "Operation cancelled with message: " + text);
         } else {
-            System.err.println(Thread.currentThread().getName() + " ERROR: " + text);
-            unwrap(t).printStackTrace(System.err);
+            print("ERROR", text);
+            t.printStackTrace(System.err);
         }
 
         System.err.flush();
@@ -74,5 +94,17 @@ public class StdErrLogger implements Logger {
         } else {
             return t;
         }
+    }
+
+    private static void print(String level, String text) {
+        System.err.println(Thread.currentThread().getName()
+                + " " + getTime()
+                + " " + level
+                + ": " + text);
+    }
+
+    private static String getTime() {
+        LocalDateTime now = LocalDateTime.now();
+        return dtf.format(now);
     }
 }

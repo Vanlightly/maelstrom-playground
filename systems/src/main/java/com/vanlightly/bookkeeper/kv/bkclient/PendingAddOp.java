@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.vanlightly.bookkeeper.*;
+import com.vanlightly.bookkeeper.util.InvariantViolationException;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -19,7 +20,7 @@ public class PendingAddOp {
     int ackQuorum;
 
     MessageSender messageSender;
-    LedgerHandle lh;
+    LedgerWriteHandle lh;
     boolean isRecoveryAdd;
     CompletableFuture<Entry> callerFuture;
     AtomicBoolean isCancelled;
@@ -32,7 +33,7 @@ public class PendingAddOp {
                         List<String> ensemble,
                         int writeQuorum,
                         int ackQuorum,
-                        LedgerHandle lh,
+                        LedgerWriteHandle lh,
                         boolean isRecoveryAdd,
                         CompletableFuture<Entry> callerFuture,
                         AtomicBoolean isCancelled) {
@@ -64,8 +65,15 @@ public class PendingAddOp {
         body.put(Fields.L.LAC, lh.getLastAddConfirmed());
         body.put(Fields.L.RECOVERY, isRecoveryAdd);
 
+        if (entry.getValue() == "") {
+            throw new InvariantViolationException("Empty value!");
+        }
+
         String bookieId = ensemble.get(bookieIndex);
+        logger.logDebug("Send ADD to bookie: " + bookieId + " index: " + bookieIndex
+                + " of ensemble: " + ensemble);
         messageSender.sendRequest(bookieId, Commands.Bookie.ADD_ENTRY, body)
+                .thenApply(this::checkForCancellation)
                 .thenAccept((JsonNode reply) -> handleReply(reply))
                 .whenComplete((Void v, Throwable t) -> {
                     if (t != null) {
@@ -91,8 +99,10 @@ public class PendingAddOp {
             successAdds.add(bookieIndex);
             lh.sendAddSuccessCallbacks();
         } else if (rc.equals(ReturnCodes.Bookie.FENCED)) {
-            lh.handleUnrecoverableErrorDuringAdd(rc);
+            logger.logDebug("PendingAddOp received a fenced response.");
+            lh.handleUnrecoverableErrorDuringAdd(rc, isRecoveryAdd);
         } else {
+            logger.logDebug("PendingAddOp received failure response code: " + rc);
             Map<Integer, String> failedBookies = new HashMap<>();
             failedBookies.put(bookieIndex, bookieId);
             lh.handleBookieFailure(failedBookies);
@@ -127,5 +137,13 @@ public class PendingAddOp {
         if (successAdds.contains(bookieIndex)) {
             successAdds.remove(bookieIndex);
         }
+    }
+
+    private <T> T checkForCancellation(T t) {
+        if (isCancelled.get()) {
+            throw new OperationCancelledException();
+        }
+
+        return t;
     }
 }

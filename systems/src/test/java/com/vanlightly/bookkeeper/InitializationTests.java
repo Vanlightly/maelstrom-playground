@@ -106,7 +106,7 @@ public class InitializationTests {
                 (msg) -> print(msg));
         int nodeCount = 6;
 
-        for (int n = 1; n <= nodeCount; n++) {
+        for (int n = 0; n < nodeCount; n++) {
             String nodeId = "n" + n;
             router.addNode(nodeId);
             String init = "{\"dest\":\"" + nodeId +"\",\"body\":{\"type\":\"init\",\"node_id\":\"" + nodeId +"\",\"msg_id\":" + msgId + "},\"src\":\"c1\"}\n";
@@ -124,15 +124,12 @@ public class InitializationTests {
 
             for (int i=0; i<100; i++) {
                 String kvStoreNode = Node.getKvStoreNode();
-                ObjectNode op = mapper.createObjectNode();
-                op.put(Fields.KV.Op.TYPE, Constants.KvStore.Ops.WRITE);
-                op.put(Fields.KV.Op.KEY, "A"+i);
-                op.put(Fields.KV.Op.VALUE, "B"+i);
 
                 ObjectNode body = mapper.createObjectNode();
                 body.put(Fields.MSG_TYPE, Constants.KvStore.Ops.WRITE);
                 body.put(Fields.MSG_ID, msgId);
-                body.set(Fields.KV.OP, op);
+                body.put(Fields.KV.Op.KEY, "A"+i);
+                body.put(Fields.KV.Op.VALUE, "B"+i);
 
                 ObjectNode writeMsg = mapper.createObjectNode();
                 writeMsg.put(Fields.DEST, kvStoreNode);

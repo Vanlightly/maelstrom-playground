@@ -10,6 +10,7 @@ import java.util.Map;
 public class OpLog {
     private Logger logger;
     private List<Op> log;
+    private List<Op> tempLog;
     private int replicateIndex;
     private int commitIndex;
     private int appliedIndex;
@@ -18,16 +19,11 @@ public class OpLog {
     public OpLog(Logger logger) {
         this.logger = logger;
         log = new ArrayList<>();
+        tempLog = new ArrayList<>();
         replicateIndex = -1;
         commitIndex = -1;
         appliedIndex = -1;
         idSource = -1;
-    }
-
-    public void updateIdSource() {
-        if (commitIndex > -1) {
-            idSource = log.get(commitIndex).getOpId();
-        }
     }
 
     public void printState() {
@@ -41,16 +37,43 @@ public class OpLog {
             logger.logInfo(index + " -> " + Op.opToString(op) + " committed: " + op.isCommitted());
             index++;
         }
+
+        logger.logInfo("Temp Log items:");
+        index = 0;
+        for (Op tmpOp : tempLog) {
+            logger.logInfo(index + " -> " + Op.opToString(tmpOp));
+            index++;
+        }
         logger.logInfo("-------------------------------------------");
     }
 
     /*
         Used by writers to append new ops that have not yet been replicated
      */
-    public void appendNew(Map<String,String> opData) {
-        idSource++;
-        log.add(new Op(idSource, opData));
-        checkInvariants();
+    public void appendUncommitted(Map<String,String> opData, boolean appendToMain) {
+        if (appendToMain) {
+            idSource++;
+            log.add(new Op(idSource, opData));
+            //checkLocalInvariants();
+        } else {
+            tempLog.add(new Op(-1, opData));
+        }
+    }
+
+    public void resolveTempLog() {
+        logger.logDebug("Resolving temp log. idSource: " + idSource
+                + "commitIndex: " + commitIndex + " log size: " + log.size());
+        for (Op tmpOp : tempLog) {
+            idSource++;
+            log.add(new Op(idSource, tmpOp.getFields()));
+        }
+        tempLog.clear();
+        logger.logDebug("Temp log cleared");
+        checkLocalInvariants();
+    }
+
+    public void discardTempLog() {
+        tempLog.clear();
     }
 
     public Op getLastOp() {
@@ -67,14 +90,18 @@ public class OpLog {
      */
     public void appendCommitted(Op op) {
         log.add(op);
+        idSource = op.getOpId();
         commitIndex++;
         replicateIndex = commitIndex;
 
         if (commitIndex != log.size()-1) {
             logger.logError("Inconsistent committed index. Is: " + commitIndex
                 + " but should be: " + (log.size()-1));
+        } else if (idSource != log.size()-1) {
+            logger.logError("Inconsistent isSource. Is: " + idSource
+                    + " but should be: " + (log.size() - 1));
         }
-        checkInvariants();
+        //checkLocalInvariants();
     }
 
     public void committed(Op op) {
@@ -85,10 +112,6 @@ public class OpLog {
             logger.logDebug("Committing op: " + Op.opToString(currOp) + " at index: " + index);
 
             for (int i = 0; i < log.size(); i++) {
-                if (i == index) {
-                    logger.logDebug("Checking op: " + Op.opToString(currOp) + " at index: " + index);
-                }
-
                 if (log.get(i).isCommitted()) {
                     if (i > commitIndex) {
                         logger.logDebug("Advanced commit index from " + commitIndex + " to: " + i);
@@ -96,10 +119,11 @@ public class OpLog {
                     }
                 }
             }
-            checkInvariants();
+            //checkLocalInvariants();
         } else {
             // error, should not happen
-            logger.logError("Tried to commit an op that does not exist");
+            printState();
+            logger.logError("Tried to commit an op that does not exist. Op: " + Op.opToString(op));
         }
 
     }
@@ -110,6 +134,9 @@ public class OpLog {
 
     public Op getNextUnreplicatedOp() {
         replicateIndex++;
+        logger.logDebug("Increment replicateIndex. replicateIndex: " + replicateIndex
+                + " commitIndex: " + commitIndex
+                + " appliedIndex: " + appliedIndex);
         return log.get(replicateIndex);
     }
 
@@ -120,24 +147,14 @@ public class OpLog {
     public Op getNextUnappliedOp() {
         appliedIndex++;
 
-        logger.logInfo("Apply op. replicateIndex: " + replicateIndex
+        logger.logDebug("Increment appliedIndex. replicateIndex: " + replicateIndex
                 + " commitIndex: " + commitIndex
                 + " appliedIndex: " + appliedIndex);
         return log.get(appliedIndex);
     }
 
-    public List<Op> getAllUnappliedOps() {
-        List<Op> unapplied = new ArrayList<>();
-
-        for (int i=appliedIndex+1; i<log.size(); i++) {
-            unapplied.add(log.get(i));
-        }
-
-        return unapplied;
-    }
-
-    // TODO: only really need to clear the writes
-    public List<Op> clearUncomittedOps() {
+    public List<Op> truncateUncomittedOps() {
+        logger.logDebug("Truncating log to committed index: " + commitIndex);
         List<Op> newLog = new ArrayList<>();
         List<Op> uncommitted = new ArrayList<>();
 
@@ -149,16 +166,29 @@ public class OpLog {
             }
         }
 
+        uncommitted.addAll(tempLog);
+
         log = newLog;
         replicateIndex = commitIndex;
-        updateIdSource();
-
-        checkInvariants();
+        resetIdSourceToLastCommit();
+        discardTempLog();
+        //checkLocalInvariants();
 
         return uncommitted;
     }
 
-    private void checkInvariants() {
+    private void resetIdSourceToLastCommit() {
+        long newIdSource = -1;
+        if (commitIndex > -1) {
+            newIdSource = log.get(commitIndex).getOpId();
+        }
+
+        logger.logDebug("Setting idSource from: " + idSource + " to: " + newIdSource
+                + " commitIndex: " + commitIndex + " log size: " + log.size());
+        idSource = newIdSource;
+    }
+
+    private void checkLocalInvariants() {
         noUncommittedOpBelowCommittedIndex();
         opIdsAreContiguous();
     }

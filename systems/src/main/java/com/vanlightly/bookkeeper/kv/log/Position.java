@@ -1,5 +1,7 @@
 package com.vanlightly.bookkeeper.kv.log;
 
+import java.util.Objects;
+
 public class Position {
     private long ledgerId;
     private long entryId;
@@ -51,5 +53,19 @@ public class Position {
                 "ledgerId=" + ledgerId +
                 ", entryId=" + entryId +
                 '}';
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        Position position = (Position) o;
+        return getLedgerId() == position.getLedgerId() &&
+                getEntryId() == position.getEntryId();
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(getLedgerId(), getEntryId());
     }
 }

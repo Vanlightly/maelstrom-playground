@@ -23,7 +23,6 @@ public class Futures {
 
             operationFuture.whenComplete((value, throwable) -> {
                 if (isCancelled.get()) {
-                    System.out.println("Retry cancelled!!!!");
                     callerFuture.completeExceptionally(new OperationCancelledException());
                 }
 

@@ -7,12 +7,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import java.time.temporal.TemporalUnit;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -48,41 +44,14 @@ public class SessionManager implements RequestHandler {
         this.lastSentKeepAlive = Instant.now().minus(1, ChronoUnit.DAYS);
     }
 
-    public boolean shouldMaintainSession() {
-        return (sessionId.get() == -1L && !pendingSessionId.get())
-                || (Duration.between(lastSentKeepAlive, Instant.now()).toMillis() > keepAliveMs
-                    && !pendingKeepAlive.get());
-    }
-
     public boolean maintainSession() {
-        if (shouldMaintainSession()) {
-            if (sessionId.get() > -1) {
-                if (!pendingKeepAlive.get()) {
-                    pendingKeepAlive.set(true);
-                    ObjectNode ka = mapper.createObjectNode();
-                    ka.put(Fields.SESSION_ID, sessionId.get());
-                    messageSender.sendRequest(Node.MetadataNodeId, Commands.Metadata.SESSION_KEEP_ALIVE,
-                            ka, (int)Constants.KeepAlives.KeepAliveIntervalMs*3)
-                        .thenAccept((JsonNode msg) -> {
-                            String rc = msg.get(Fields.BODY).get(Fields.RC).asText();
-                            if (rc.equals(ReturnCodes.Metadata.BAD_SESSION) &&
-                                msg.get(Fields.BODY).get(Fields.SESSION_ID).asLong() >= sessionId.get()) {
-                                logger.logDebug("Bad session. Initiating new session");
-                                obtainNewSession();
-                            }
-                            // timeouts and ok return codes can be ignored
-                        })
-                        .whenComplete((Void v, Throwable t) -> {
-                            if (t != null) {
-                                logger.logError("Keep alive failed", t);
-                            }
-                            pendingKeepAlive.set(false);
-                        });
-                    lastSentKeepAlive = Instant.now();
-                }
-            } else if (!pendingSessionId.get()) {
-                obtainNewSession();
-            }
+        if (!pendingSessionId.get() && sessionId.get() == -1L) {
+            obtainNewSession();
+            return true;
+        } else if (sessionId.get() > -1L
+                && !pendingKeepAlive.get()
+                && Duration.between(lastSentKeepAlive, Instant.now()).toMillis() > keepAliveMs) {
+            sendKeepAlive();
             return true;
         } else {
             return false;
@@ -124,7 +93,7 @@ public class SessionManager implements RequestHandler {
     private void obtainNewSession() {
         pendingSessionId.set(true);
         lastSentKeepAlive = Instant.now();
-        logger.logDebug("Obtaining a new session. Curr: " + sessionId.get());
+        logger.logDebug("Obtaining a new session. Current session is: " + sessionId.get());
         messageSender.sendRequest(Node.MetadataNodeId, Commands.Metadata.SESSION_NEW)
             .thenAccept((JsonNode reply) -> updateSession(reply))
             .whenComplete((Void v, Throwable t) -> {
@@ -136,14 +105,40 @@ public class SessionManager implements RequestHandler {
             });
     }
 
+    private void sendKeepAlive() {
+        pendingKeepAlive.set(true);
+        ObjectNode ka = mapper.createObjectNode();
+        ka.put(Fields.SESSION_ID, sessionId.get());
+        messageSender.sendRequest(Node.MetadataNodeId, Commands.Metadata.SESSION_KEEP_ALIVE,
+                ka, (int)Constants.KeepAlives.KeepAliveIntervalMs*3)
+                .thenAccept((JsonNode msg) -> {
+                    String rc = msg.get(Fields.BODY).get(Fields.RC).asText();
+                    long session = msg.get(Fields.BODY).path(Fields.SESSION_ID).asLong();
+                    if (rc.equals(ReturnCodes.Metadata.BAD_SESSION)
+                            && session >= sessionId.get()
+                            && !pendingSessionId.get()) {
+                        logger.logDebug("Keep Alive response of bad session " + session);
+                        obtainNewSession();
+                    }
+                    // timeouts and ok return codes can be ignored
+                })
+                .whenComplete((Void v, Throwable t) -> {
+                    if (t != null) {
+                        logger.logError("Keep alive failed", t);
+                    }
+                    pendingKeepAlive.set(false);
+                });
+        lastSentKeepAlive = Instant.now();
+    }
+
     private void updateSession(JsonNode msg) {
         JsonNode body = msg.get(Fields.BODY);
         String rc = body.get(Fields.RC).asText();
 
         if (rc.equals(ReturnCodes.OK)) {
             long newSessionId = body.get(Fields.SESSION_ID).asLong();
-            logger.logDebug("Obtained new session: " + newSessionId);
             if (newSessionId > sessionId.get()) {
+                logger.logDebug("Obtained new session: " + newSessionId);
                 sessionId.set(newSessionId);
 
                 for (CompletableFuture<Long> future : sessionFutures) {

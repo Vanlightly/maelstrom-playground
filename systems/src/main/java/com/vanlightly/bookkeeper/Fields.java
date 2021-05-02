@@ -32,8 +32,6 @@ public class Fields {
         public final static String LEADER = "leader";
         public final static String LEADER_VERSION = "leader_version";
 
-        public final static String OP = "op";
-
         public class Op {
             public final static String TYPE = "type";
             public final static String KEY = "key";

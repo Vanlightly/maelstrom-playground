@@ -5,7 +5,7 @@ import com.vanlightly.bookkeeper.*;
 import com.vanlightly.bookkeeper.kv.Op;
 import com.vanlightly.bookkeeper.kv.bkclient.BkException;
 import com.vanlightly.bookkeeper.kv.bkclient.Entry;
-import com.vanlightly.bookkeeper.kv.bkclient.LedgerHandle;
+import com.vanlightly.bookkeeper.kv.bkclient.LedgerWriteHandle;
 import com.vanlightly.bookkeeper.metadata.LedgerMetadata;
 import com.vanlightly.bookkeeper.metadata.LedgerStatus;
 import com.vanlightly.bookkeeper.metadata.Versioned;
@@ -21,9 +21,14 @@ import java.util.stream.Collectors;
 /*
     Writes to the log and updates the cursor and committed index.
     Abstracts away ledgers and handles - is at the log abstraction level.
+
+    A single log writer instance only ever writes to a single ledger. When
+    an event occurs such as the ledger having been closed, fenced or there
+    not being enough bookies to write, then the writer aborts.
  */
 public class LogWriter extends LogClient {
 
+    private LedgerWriteHandle writeHandle;
     private Versioned<List<Long>> cachedLedgerList;
 
     public LogWriter(ManagerBuilder managerBuilder,
@@ -36,45 +41,48 @@ public class LogWriter extends LogClient {
         this.cachedLedgerList = new Versioned<>(new ArrayList<>(), -1);
     }
 
-    public CompletableFuture<Void> start() {
-        return metadataManager.getLedgerList()
-                .thenApply(this::checkForCancellation)
-                .thenCompose((Versioned<List<Long>> vll) -> {
-                    cachedLedgerList = vll;
-                    return createWritableLedgerHandle();
-                })
+    public CompletableFuture<Void> start(Versioned<List<Long>> cachedLedgerList) {
+        this.cachedLedgerList = cachedLedgerList;
+
+        return createWritableLedgerHandle()
                 .thenApply(this::checkForCancellation)
                 .thenAccept((Void v) -> {
-                    Position p = new Position(lh.getLedgerId(), -1L);
+                    Position p = new Position(writeHandle.getLedgerId(), -1L);
                     cursorUpdater.accept(p, null);
                 });
     }
 
+    @Override
+    public void cancel() {
+        isCancelled.set(true);
+        if (writeHandle != null) {
+            writeHandle.cancel();
+        }
+    }
+
     public boolean isHealthy() {
-        return lh.getCachedLedgerMetadata().getValue().getStatus().equals(LedgerStatus.OPEN);
+        return writeHandle.getCachedLedgerMetadata().getValue().getStatus().equals(LedgerStatus.OPEN);
+    }
+
+    public Versioned<List<Long>> getCachedLedgerList() {
+        return cachedLedgerList;
     }
 
     public void printState() {
         logger.logInfo("-------------- Log Writer state -------------");
-        if (lh == null) {
+        if (writeHandle == null) {
             logger.logInfo("No ledger handle");
         } else {
-            lh.printState();
+            writeHandle.printState();
         }
         logger.logInfo("---------------------------------------------");
     }
 
     public CompletableFuture<Void> close() {
         CompletableFuture<Void> future = new CompletableFuture<>();
-        lh.close()
-                .thenApply(this::checkForCancellation)
-                .thenAccept((Versioned<LedgerMetadata> vlm) -> {
-                    logger.logInfo("Ledger closed successfully");
-                    future.complete(null);
-                })
-                .whenComplete((Void v, Throwable t) -> {
+        writeHandle.close()
+                .whenComplete((Versioned<LedgerMetadata> vlm, Throwable t) -> {
                     if (isError(t)) {
-                        logger.logError("Failed to close ledger properly");
                         future.completeExceptionally(t);
                     } else {
                         future.complete(null);
@@ -85,7 +93,7 @@ public class LogWriter extends LogClient {
     }
 
     public CompletableFuture<Void> write(String value) {
-        return lh.addEntry(value)
+        return writeHandle.addEntry(value)
                 .thenApply(this::checkForCancellation)
                 .thenAccept((Entry entry) -> {
                     Op op = Op.stringToOp(entry.getValue());
@@ -105,8 +113,9 @@ public class LogWriter extends LogClient {
                 .thenApply(this::checkForCancellation)
                 .whenComplete((Versioned<LedgerMetadata> vlm, Throwable t) -> {
                     if (t == null) {
-                        lh = new LedgerHandle(mapper, ledgerManager, messageSender,
-                                logger, isCancelled, vlm);
+                        writeHandle = new LedgerWriteHandle(mapper, ledgerManager, messageSender, logger, vlm);
+                        logger.logDebug("Created new ledger handle for writer");
+                        writeHandle.printState();
                         future.complete(null);
                     } else if (isError(t)) {
                         future.completeExceptionally(t);
@@ -118,8 +127,7 @@ public class LogWriter extends LogClient {
     }
 
     private CompletableFuture<Versioned<LedgerMetadata>> createLedgerMetadata(List<String> availableBookies) {
-        int writeQuorum = 3;
-        if (availableBookies.size() < writeQuorum) {
+        if (availableBookies.size() < Constants.Bookie.WriteQuorum) {
             return Futures.failedFuture(
                     new BkException("Not enough non-faulty bookies",
                             ReturnCodes.Bookie.NOT_ENOUGH_BOOKIES));
@@ -127,8 +135,10 @@ public class LogWriter extends LogClient {
             return ledgerManager.getLedgerId()
                     .thenApply(this::checkForCancellation)
                     .thenCompose((Long ledgerId) -> {
-                        List<String> ensemble = randomSubset(availableBookies, writeQuorum);
-                        LedgerMetadata lmd = new LedgerMetadata(ledgerId, writeQuorum, 2, ensemble);
+                        List<String> ensemble = randomSubset(availableBookies, Constants.Bookie.WriteQuorum);
+                        LedgerMetadata lmd = new LedgerMetadata(ledgerId, Constants.Bookie.WriteQuorum,
+                                Constants.Bookie.AckQuorum, ensemble);
+                        logger.logDebug("Sending create ledger metadata request: " + lmd);
                         return ledgerManager.createLedgerMetadata(lmd);
                     });
         }
@@ -140,6 +150,7 @@ public class LogWriter extends LogClient {
         cachedLedgerList.getValue().add(ledgerMetadata.getValue().getLedgerId());
         metadataManager.updateLedgerList(cachedLedgerList)
                 .thenAccept((Versioned<List<Long>> vll) -> {
+                    logger.logDebug("Appended ledger to list: " + vll.getValue());
                     cachedLedgerList = vll;
                     future.complete(ledgerMetadata);
                 })

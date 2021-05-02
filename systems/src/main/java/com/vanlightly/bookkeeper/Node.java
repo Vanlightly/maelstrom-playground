@@ -7,6 +7,7 @@ import com.vanlightly.bookkeeper.network.NetworkIO;
 import com.vanlightly.bookkeeper.util.DeadlineCollection;
 import com.vanlightly.bookkeeper.util.Futures;
 
+import java.lang.reflect.Field;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -20,8 +21,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
     are linearized with the external triggers of receiving messages.
  */
 public abstract class Node implements MessageSender {
-    public final static String MetadataNodeId = "n1";
-    public static int BookieCount = 3; // default is 3 but is configurable.
+    public final static String MetadataNodeId = "n0";
 
     protected NetworkIO net;
     protected Logger logger;
@@ -66,9 +66,9 @@ public abstract class Node implements MessageSender {
 
     public static NodeType determineType(String nodeId) {
         int nodeOrdinal = Integer.parseInt(nodeId.replace("n", ""));
-        if (nodeOrdinal == 1) {
+        if (nodeOrdinal == 0) {
             return NodeType.MetadataStore;
-        } else if (nodeOrdinal <= BookieCount + 1) {
+        } else if (nodeOrdinal <= Constants.Bookie.BookieCount) {
             return NodeType.Bookie;
         } else {
             return NodeType.KvStore;
@@ -76,8 +76,8 @@ public abstract class Node implements MessageSender {
     }
 
     public static String getKvStoreNode() {
-        // 1 metadata store, BookieCount bookies, rest are KV stores
-        return "n" + BookieCount + 2;
+        // 0 metadata store, BookieCount bookies, rest are KV stores
+        return "n" + (Constants.Bookie.BookieCount + 1);
     }
 
     public Logger getLogger() {
@@ -97,7 +97,7 @@ public abstract class Node implements MessageSender {
                 ObjectNode body = mapper.createObjectNode();
                 body.put(Fields.MSG_TYPE, msg.get(Fields.BODY).get(Fields.MSG_TYPE).asText());
                 body.put(Fields.RC, ReturnCodes.TIME_OUT);
-                body.put(Fields.IN_REPLY_TO, msg.get(Fields.BODY).get(Fields.MSG_ID).asText());
+                body.put(Fields.IN_REPLY_TO, msg.get(Fields.BODY).get(Fields.MSG_ID).asInt());
 
                 timeOutResponse.set(Fields.BODY, body);
                 timeOutResponse.put(Fields.SOURCE, msg.get(Fields.DEST).asText());
@@ -196,7 +196,10 @@ public abstract class Node implements MessageSender {
         }
         body.put(Fields.MSG_ID, nextMsgId);
         body.set("in_reply_to", msg.get(Fields.BODY).get(Fields.MSG_ID));
-        body.put(Fields.MSG_TYPE, msg.get(Fields.BODY).get(Fields.MSG_TYPE).asText());
+
+        if (!replyBody.has(Fields.MSG_TYPE)) {
+            body.put(Fields.MSG_TYPE, msg.get(Fields.BODY).get(Fields.MSG_TYPE).asText());
+        }
 
         ObjectNode outMsg = mapper.createObjectNode();
         outMsg.put(Fields.SOURCE, nodeId);
@@ -224,9 +227,42 @@ public abstract class Node implements MessageSender {
     }
 
     protected void proxy(JsonNode msg, String dest) {
-        ObjectNode proxiedMsg = (ObjectNode)msg;
-        proxiedMsg.put(Fields.DEST, dest);
-        net.write(proxiedMsg.toString());
+//        logger.logDebug("PROXY MSG FORWARD SEND. From: " + nodeId + " to: " + dest);
+        ObjectNode msgBody = (ObjectNode)msg.get(Fields.BODY);
+        sendRequest(dest,
+                msgBody.get(Fields.MSG_TYPE).asText(),
+                msgBody,
+                Constants.Timeouts.ProxyTimeoutMs)
+            .thenAccept((JsonNode replyMsg) -> {
+                String origin = msg.get(Fields.SOURCE).asText();
+                ObjectNode replyBody = (ObjectNode)replyMsg.get(Fields.BODY);
+
+                if (replyBody.has(Fields.RC)) {
+                    // if the response has the RC field then it will be a timeout
+                    // or some other such error
+//                    logger.logDebug("PROXY MSG FAILED. From: " + dest + " to: " + origin
+//                            + " rc: " + replyBody.get(Fields.RC).asText());
+                    ObjectNode failBody = mapper.createObjectNode();
+                    failBody.put(Fields.IN_REPLY_TO, msgBody.get(Fields.MSG_ID).asInt());
+                    failBody.put(Fields.KV.Op.TYPE, "error");
+                    failBody.put(Fields.KV.Op.CODE, 13);
+                    failBody.put(Fields.KV.Op.ERROR_TEXT, "proxy error");
+                    send(origin,
+                            failBody.get(Fields.MSG_TYPE).asText(),
+                            failBody);
+                } else {
+//                    logger.logDebug("PROXY MSG FORWARD REPLY. From: " + dest + " to: " + origin);
+                    replyBody.put(Fields.IN_REPLY_TO, msgBody.get(Fields.MSG_ID).asInt());
+                    send(origin,
+                            replyBody.get(Fields.MSG_TYPE).asText(),
+                            replyBody);
+                }
+            })
+            .whenComplete((Void v, Throwable t) -> {
+                if (t != null) {
+                    logger.logError("Failed proxying msg: " + msg, t);
+                }
+            });
     }
 
     public void handleReply(JsonNode reply) {

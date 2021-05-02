@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.vanlightly.bookkeeper.bookie.Entry;
 import com.vanlightly.bookkeeper.bookie.Ledger;
 import com.vanlightly.bookkeeper.network.NetworkIO;
+import com.vanlightly.bookkeeper.util.InvariantViolationException;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -103,52 +104,63 @@ public class BookieNode extends Node {
         long lac = body.get(Fields.L.LAC).asLong();
         String value = body.get(Fields.L.VALUE).asText();
 
-        Ledger ledger = ledgers.get(ledgerId);
-        if (ledger == null) {
-            ledger = new Ledger(logger, ledgerId);
-            ledgers.put(ledgerId, ledger);
-        }
-
+        Ledger ledger = getLedger(ledgerId);
         ledger.add(entryId, lac, value);
         reply(msg, ReturnCodes.OK);
+
+        logger.logDebug("ADD for ledger: " + ledgerId + " entry: " + entryId
+                + " from: " + msg.get(Fields.SOURCE).asText());
+
+        checkLocalInvariants();
     }
 
     private void handleReadEntry(JsonNode msg) {
-        if (!checkLedgerExists(msg)) {
-            return;
-        }
-
         JsonNode body = msg.get(Fields.BODY);
         long ledgerId = body.get(Fields.L.LEDGER_ID).asLong();
         long entryId = body.get(Fields.L.ENTRY_ID).asLong();
         boolean isFencingRead = msg.get(Fields.BODY).path(Fields.L.FENCE).asBoolean(false);
 
-        Ledger ledger = ledgers.get(ledgerId);
-
         if (isFencingRead) {
-            ledger.fenceLedger();
+            logger.logDebug("Fenced ledger: " + ledgerId + " from: " + msg.get(Fields.SOURCE).asText());
+            fenceLedger(ledgerId);
         }
+
+        Ledger ledger = getReadOnlyLedger(ledgerId);
 
         ObjectNode res = mapper.createObjectNode();
         res.put(Fields.L.LEDGER_ID, ledgerId);
-        res.put(Fields.L.ENTRY_ID, entryId);
-        res.put(Fields.L.LAC, ledger.getLac());
 
-        if (entryId == -1L) {
+        if (ledger == null) {
+            logger.logDebug("READ (NO_SUCH_LEDGER) for ledger: " + ledgerId + " entry: " + entryId
+                    + " from: " + msg.get(Fields.SOURCE).asText());
+            reply(msg, ReturnCodes.Bookie.NO_SUCH_LEDGER, res);
+        } else if (entryId == -1L) {
+            res.put(Fields.L.ENTRY_ID, entryId);
+            res.put(Fields.L.LAC, ledger.getLac());
+
+            logger.logDebug("READ LAC " + ledger.getLac() + " (OK) for ledger: " + ledgerId + " entry: " + entryId
+                    + " from: " + msg.get(Fields.SOURCE).asText());
+
             reply(msg, ReturnCodes.OK, res);
         } else if (ledger.hasEntry(entryId)) {
+            res.put(Fields.L.ENTRY_ID, entryId);
+            res.put(Fields.L.LAC, ledger.getLac());
             res.put(Fields.L.VALUE, ledger.read(entryId));
+
+            logger.logDebug("READ (OK) for ledger: " + ledgerId + " entry: " + entryId
+                    + " from: " + msg.get(Fields.SOURCE).asText());
+
             reply(msg, ReturnCodes.OK, res);
         } else {
+            logger.logDebug("READ (NO_SUCH_ENTRY) for ledger: " + ledgerId + " entry: " + entryId
+                    + " from: " + msg.get(Fields.SOURCE).asText());
+
+            res.put(Fields.L.ENTRY_ID, entryId);
             reply(msg, ReturnCodes.Bookie.NO_SUCH_ENTRY, res);
         }
     }
 
     private void handleReadLac(JsonNode msg) {
-        if (!checkLedgerExists(msg)) {
-            return;
-        }
-
         JsonNode body = msg.get(Fields.BODY);
         long ledgerId = body.get(Fields.L.LEDGER_ID).asLong();
         boolean isFencingRead = msg.get(Fields.BODY).path(Fields.L.FENCE).asBoolean(false);
@@ -156,40 +168,73 @@ public class BookieNode extends Node {
         ObjectNode res = mapper.createObjectNode();
         res.put(Fields.L.LEDGER_ID, ledgerId);
 
-        Ledger ledger = ledgers.get(ledgerId);
         if (isFencingRead) {
-            ledger.fenceLedger();
+            logger.logDebug("Fenced ledger: " + ledgerId + " from: " + msg.get(Fields.SOURCE).asText());
+            fenceLedger(ledgerId);
         }
 
-        res.put(Fields.L.ENTRY_ID, -1L);
-        res.put(Fields.L.LAC, ledger.getLac());
-        reply(msg, ReturnCodes.OK, res);
+        Ledger ledger = getReadOnlyLedger(ledgerId);
+
+        if (ledger == null) {
+            logger.logDebug("READ LAC (NO_SUCH_LEDGER) for ledger: " + ledgerId
+                    + " from: " + msg.get(Fields.SOURCE).asText());
+            reply(msg, ReturnCodes.Bookie.NO_SUCH_LEDGER, res);
+        } else {
+            res.put(Fields.L.ENTRY_ID, -1L);
+            res.put(Fields.L.LAC, ledger.getLac());
+
+            logger.logDebug("READ LAC " + ledger.getLac() + " (OK) for ledger: " + ledgerId
+                    + " from: " + msg.get(Fields.SOURCE).asText());
+
+            reply(msg, ReturnCodes.OK, res);
+        }
     }
 
     private void handleReadLacLongPoll(JsonNode msg) {
-        if (!checkLedgerExists(msg)) {
-            return;
-        }
-
         JsonNode body = msg.get(Fields.BODY);
         long ledgerId = body.get(Fields.L.LEDGER_ID).asLong();
         long previousLac = body.get(Fields.L.PREVIOUS_LAC).asLong();
         int timeoutMs = body.get(Fields.L.LONG_POLL_TIMEOUT_MS).asInt();
 
-        Ledger ledger = ledgers.get(ledgerId);
-        CompletableFuture<Entry> future = new CompletableFuture<>();
-        ledger.addLacFuture(previousLac, timeoutMs, future);
+        Ledger ledger = getReadOnlyLedger(ledgerId);
 
-        future.thenAccept((Entry entry) -> {
+        if (ledger == null) {
+            logger.logDebug("READ LAC (NO_SUCH_LEDGER) for ledger: " + ledgerId
+                    + " from: " + msg.get(Fields.SOURCE).asText());
+
             ObjectNode res = mapper.createObjectNode();
             res.put(Fields.L.LEDGER_ID, ledgerId);
-            res.put(Fields.L.ENTRY_ID, entry.getEntryId());
-            res.put(Fields.L.LAC, entry.getLac());
-            if (entry.getValue() != null) {
-                res.put(Fields.L.VALUE, entry.getValue());
-            }
-            reply(msg, ReturnCodes.OK, res);
-        });
+            reply(msg, ReturnCodes.Bookie.NO_SUCH_LEDGER, res);
+        } else {
+            logger.logDebug("LONG POLL READ LAC for ledger: " + ledgerId
+                    + " previousLac: " + previousLac
+                    + " from: " + msg.get(Fields.SOURCE).asText());
+
+            CompletableFuture<Entry> future = new CompletableFuture<>();
+            ledger.addLacFuture(previousLac, timeoutMs, future);
+
+            future.thenAccept((Entry entry) -> {
+                ObjectNode res = mapper.createObjectNode();
+                res.put(Fields.L.LEDGER_ID, ledgerId);
+                res.put(Fields.L.ENTRY_ID, entry.getEntryId());
+                res.put(Fields.L.LAC, entry.getLac());
+                if (entry.getValue() != null) {
+                    res.put(Fields.L.VALUE, entry.getValue());
+                }
+
+                logger.logDebug("LONG POLL READ LAC RESPONSE for ledger: " + ledgerId
+                        + " previousLac: " + previousLac
+                        + " latestLac: " + entry.getLac()
+                        + " from: " + msg.get(Fields.SOURCE).asText());
+
+                reply(msg, ReturnCodes.OK, res);
+            })
+            .whenComplete((Void v, Throwable t) -> {
+                if (t != null) {
+                    logger.logError("Long poll read error", t);
+                }
+            });
+        }
     }
 
     private boolean expireLongPollLacReads() {
@@ -208,37 +253,50 @@ public class BookieNode extends Node {
         }
     }
 
-    private boolean checkLedgerExists(JsonNode msg) {
-        JsonNode body = msg.get(Fields.BODY);
-        long ledgerId = body.get(Fields.L.LEDGER_ID).asLong();
-
-        Ledger ledger = ledgers.get(ledgerId);
-        if (ledger == null) {
-            ObjectNode res = mapper.createObjectNode();
-            res.put(Fields.L.LEDGER_ID, ledgerId);
-            reply(msg, ReturnCodes.Bookie.NO_SUCH_LEDGER, res);
-            return false;
-        }
-
-        return true;
+    private void fenceLedger(long ledgerId) {
+        Ledger ledger = getLedger(ledgerId);
+        ledger.fenceLedger();
     }
 
     private boolean checkLedgerWritable(JsonNode msg) {
         JsonNode body = msg.get(Fields.BODY);
         long ledgerId = body.get(Fields.L.LEDGER_ID).asLong();
 
-        Ledger ledger = ledgers.get(ledgerId);
-
-        if (ledger != null) {
-            boolean isRecoveryAdd = msg.get(Fields.BODY).path(Fields.L.RECOVERY).asBoolean(false);
-            if (ledger.isFenced() && !isRecoveryAdd) {
-                ObjectNode res = mapper.createObjectNode();
-                res.put(Fields.L.LEDGER_ID, ledgerId);
-                reply(msg, ReturnCodes.Bookie.FENCED, res);
-                return false;
-            }
+        Ledger ledger = getLedger(ledgerId);
+        boolean isRecoveryAdd = msg.get(Fields.BODY).path(Fields.L.RECOVERY).asBoolean(false);
+        if (ledger.isFenced() && !isRecoveryAdd) {
+            logger.logDebug("ADD rejected as ledger is fenced. Ledger: " + ledgerId
+                    + " from: " + msg.get(Fields.SOURCE).asText());
+            ObjectNode res = mapper.createObjectNode();
+            res.put(Fields.L.LEDGER_ID, ledgerId);
+            reply(msg, ReturnCodes.Bookie.FENCED, res);
+            return false;
         }
 
         return true;
+    }
+
+    private void checkLocalInvariants() {
+        for (Ledger ledger : ledgers.values()) {
+            for (Map.Entry<Long,String> entry : ledger.getEntries().entrySet()) {
+                if (entry.getValue().equals("")) {
+                    throw new InvariantViolationException("Empty entry found in ledger: " + ledger.getLedgerId()
+                    + " entry: " + entry.getKey());
+                }
+            }
+        }
+    }
+
+    private Ledger getLedger(long ledgerId) {
+        Ledger ledger = ledgers.get(ledgerId);
+        if (ledger == null) {
+            ledger = new Ledger(logger, ledgerId);
+            ledgers.put(ledgerId, ledger);
+        }
+        return ledger;
+    }
+
+    private Ledger getReadOnlyLedger(long ledgerId) {
+        return ledgers.get(ledgerId);
     }
 }

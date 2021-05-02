@@ -13,7 +13,7 @@ import java.util.stream.Collectors;
 
 public class KvStore {
     Logger logger;
-    Map<String, String> store;
+    Map<String, Integer> store;
     ObjectMapper mapper;
 
     public KvStore(ObjectMapper mapper, Logger logger) {
@@ -27,11 +27,12 @@ public class KvStore {
 
         String key = op.get(Fields.KV.Op.KEY);
         String type = op.get(Fields.KV.Op.TYPE);
-        body.put(Fields.KV.Op.CMD_TYPE, type);
+        //body.put(Fields.KV.Op.CMD_TYPE, type);
+        body.put(Fields.IN_REPLY_TO, Integer.parseInt(op.get(Fields.MSG_ID)));
 
         switch (type) {
             case Constants.KvStore.Ops.WRITE:
-                store.put(key, op.get(Fields.KV.Op.VALUE));
+                store.put(key, Integer.parseInt(op.get(Fields.KV.Op.VALUE)));
                 body.put(Fields.KV.Op.TYPE, "write_ok");
                 break;
             case Constants.KvStore.Ops.READ:
@@ -46,11 +47,11 @@ public class KvStore {
                 break;
             case Constants.KvStore.Ops.CAS:
                 if (store.containsKey(key)) {
-                    String currVal = store.get(key);
-                    String fromVal = op.get(Fields.KV.Op.FROM);
-                    String toVal = op.get(Fields.KV.Op.TO);
+                    int currVal = store.get(key);
+                    int fromVal = Integer.parseInt(op.get(Fields.KV.Op.FROM));
+                    int toVal = Integer.parseInt(op.get(Fields.KV.Op.TO));
 
-                    if (currVal.equals(fromVal)) {
+                    if (currVal == fromVal) {
                         body.put(Fields.KV.Op.TYPE, "cas_ok");
                         store.put(key, toVal);
                     } else {
@@ -68,7 +69,7 @@ public class KvStore {
                 throw new RuntimeException("Operation not supported");
         }
 
-        logger.logDebug("Apply result: " + body + " KV: " + store);
+        logger.logDebug("Apply. Op: " + op + " Body: " + body);
 
         return body;
     }

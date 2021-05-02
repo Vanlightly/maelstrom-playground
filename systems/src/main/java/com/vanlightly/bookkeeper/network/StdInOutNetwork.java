@@ -22,7 +22,9 @@ public class StdInOutNetwork implements NetworkIO {
 
     @Override
     public String readNext() {
-        return scanner.nextLine();
+        String line = scanner.nextLine();
+        //System.err.println(line);
+        return line;
     }
 
     @Override
@@ -31,6 +33,8 @@ public class StdInOutNetwork implements NetworkIO {
         try {
             System.out.println(msg);
             System.out.flush();
+//            System.err.println(msg);
+//            System.err.flush();
         } finally {
             lock.unlock();
         }

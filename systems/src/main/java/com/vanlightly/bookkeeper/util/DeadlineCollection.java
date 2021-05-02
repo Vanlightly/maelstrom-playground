@@ -30,6 +30,7 @@ public class DeadlineCollection<T> {
         }
 
         Long firstKey = data.firstKey();
+
         return firstKey != null && firstKey <= deadline;
     }
 

@@ -16,6 +16,7 @@ public class ReturnCodes {
         public final static String LEDGER_CLOSED = "ledger-closed";
         public final static String UNKNOWN = "unknown";
         public final static String NO_QUORUM = "no-quorum";
+        public final static String UNEXPECTED_LEDGER = "unexpected-ledger";
     }
 
     public static class Metadata {

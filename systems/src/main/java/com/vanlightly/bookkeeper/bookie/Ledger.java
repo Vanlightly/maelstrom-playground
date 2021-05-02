@@ -27,6 +27,10 @@ public class Ledger {
         this.lacLongPollReadsByTimeout = new DeadlineCollection<>();
     }
 
+    public long getLedgerId() {
+        return ledgerId;
+    }
+
     public void add(Long entryId, Long entryLac, String value) {
         entries.put(entryId, value);
         logger.logDebug("Adding entry=" + entryId + ", lac=" + entryLac + ", value=" + value);
@@ -116,6 +120,10 @@ public class Ledger {
         }
 
         return foundExpired;
+    }
+
+    public Map<Long, String> getEntries() {
+        return entries;
     }
 
     @Override

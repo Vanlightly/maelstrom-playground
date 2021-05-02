@@ -3,7 +3,6 @@ package com.vanlightly.bookkeeper.kv.log;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vanlightly.bookkeeper.*;
 import com.vanlightly.bookkeeper.kv.Op;
-import com.vanlightly.bookkeeper.kv.bkclient.LedgerHandle;
 import com.vanlightly.bookkeeper.kv.bkclient.LedgerManager;
 import com.vanlightly.bookkeeper.util.Futures;
 
@@ -23,7 +22,6 @@ public abstract class LogClient {
     protected AtomicBoolean isCancelled;
 
     protected BiConsumer<Position, Op> cursorUpdater;
-    protected LedgerHandle lh;
 
     public LogClient(ManagerBuilder managerBuilder,
                      ObjectMapper mapper,
@@ -39,9 +37,7 @@ public abstract class LogClient {
         this.cursorUpdater = cursorUpdater;
     }
 
-    public void cancel() {
-        isCancelled.set(true);
-    }
+    public abstract void cancel();
 
     protected <T> T checkForCancellation(T t) {
         if (isCancelled.get()) {
