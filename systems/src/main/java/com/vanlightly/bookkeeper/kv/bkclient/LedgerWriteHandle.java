@@ -7,14 +7,16 @@ import com.vanlightly.bookkeeper.metadata.LedgerStatus;
 import com.vanlightly.bookkeeper.metadata.Versioned;
 import com.vanlightly.bookkeeper.util.Futures;
 import com.vanlightly.bookkeeper.util.InvariantViolationException;
+import com.vanlightly.bookkeeper.util.LogManager;
+import com.vanlightly.bookkeeper.util.Logger;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class LedgerWriteHandle {
+    private Logger logger = LogManager.getLogger(this.getClass().getName());
     private ObjectMapper mapper;
-    private Logger logger;
     private MessageSender messageSender;
     private AtomicBoolean isCancelled;
 
@@ -33,12 +35,10 @@ public class LedgerWriteHandle {
     public LedgerWriteHandle(ObjectMapper mapper,
                         LedgerManager ledgerManager,
                         MessageSender messageSender,
-                        Logger logger,
                         Versioned<LedgerMetadata> versionedMetadata) {
         this.mapper = mapper;
         this.ledgerManager = ledgerManager;
         this.messageSender = messageSender;
-        this.logger = logger;
         this.versionedMetadata = versionedMetadata;
         this.pendingAddOps = new ArrayDeque<>();
         this.pendingAddsSequenceHead = -1L;
@@ -116,7 +116,6 @@ public class LedgerWriteHandle {
         Entry entry = new Entry(lm().getLedgerId(), lastAddPushed, value);
         PendingAddOp addOp = new PendingAddOp(mapper,
                 messageSender,
-                logger,
                 entry,
                 lm().getCurrentEnsemble(),
                 lm().getWriteQuorum(),

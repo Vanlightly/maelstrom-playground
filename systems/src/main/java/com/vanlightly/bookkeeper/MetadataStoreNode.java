@@ -9,6 +9,7 @@ import com.vanlightly.bookkeeper.metadata.LedgerMetadata;
 import com.vanlightly.bookkeeper.metadata.Session;
 import com.vanlightly.bookkeeper.metadata.Versioned;
 import com.vanlightly.bookkeeper.network.NetworkIO;
+import com.vanlightly.bookkeeper.util.Logger;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -35,10 +36,9 @@ public class MetadataStoreNode extends Node {
 
     public MetadataStoreNode(String nodeId,
                              NetworkIO net,
-                             Logger logger,
                              ObjectMapper mapper,
                              ManagerBuilder builder) {
-        super(nodeId, false, net, logger, mapper, builder);
+        super(nodeId, false, net, mapper, builder);
         this.sessions = new HashMap<>();
         this.ledgerList = new Versioned<>(new ArrayList<>(), 0);
         this.availableBookies = new HashSet<>();

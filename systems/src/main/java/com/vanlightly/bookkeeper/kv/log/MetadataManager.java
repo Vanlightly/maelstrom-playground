@@ -7,6 +7,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.vanlightly.bookkeeper.*;
 import com.vanlightly.bookkeeper.metadata.Versioned;
 import com.vanlightly.bookkeeper.util.Futures;
+import com.vanlightly.bookkeeper.util.LogManager;
+import com.vanlightly.bookkeeper.util.Logger;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -14,8 +16,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class MetadataManager {
+    private Logger logger = LogManager.getLogger(this.getClass().getName());
     private ObjectMapper mapper;
-    private Logger logger;
     private SessionManager sessionManager;
     private MessageSender messageSender;
     private AtomicBoolean isCancelled;
@@ -23,12 +25,10 @@ public class MetadataManager {
     public MetadataManager(ObjectMapper mapper,
                            SessionManager sessionManager,
                            MessageSender messageSender,
-                           Logger logger,
                            AtomicBoolean isCancelled) {
         this.mapper = mapper;
         this.sessionManager = sessionManager;
         this.messageSender = messageSender;
-        this.logger = logger;
         this.isCancelled = isCancelled;
     }
 

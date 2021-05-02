@@ -7,6 +7,7 @@ import com.vanlightly.bookkeeper.bookie.Entry;
 import com.vanlightly.bookkeeper.bookie.Ledger;
 import com.vanlightly.bookkeeper.network.NetworkIO;
 import com.vanlightly.bookkeeper.util.InvariantViolationException;
+import com.vanlightly.bookkeeper.util.Logger;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -21,10 +22,9 @@ public class BookieNode extends Node {
 
     public BookieNode(String nodeId,
                       NetworkIO net,
-                      Logger logger,
                       ObjectMapper mapper,
                       ManagerBuilder builder) {
-        super(nodeId, true, net, logger, mapper, builder);
+        super(nodeId, true, net, mapper, builder);
         ledgers = new HashMap<>();
         lastCheckedExpiredReads = Instant.now().minus(1, ChronoUnit.DAYS);
     }
@@ -290,7 +290,7 @@ public class BookieNode extends Node {
     private Ledger getLedger(long ledgerId) {
         Ledger ledger = ledgers.get(ledgerId);
         if (ledger == null) {
-            ledger = new Ledger(logger, ledgerId);
+            ledger = new Ledger(ledgerId);
             ledgers.put(ledgerId, ledger);
         }
         return ledger;

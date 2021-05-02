@@ -5,14 +5,16 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.vanlightly.bookkeeper.*;
 import com.vanlightly.bookkeeper.util.InvariantViolationException;
+import com.vanlightly.bookkeeper.util.LogManager;
+import com.vanlightly.bookkeeper.util.Logger;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class PendingAddOp {
+    private Logger logger = LogManager.getLogger(this.getClass().getName());
     ObjectMapper mapper;
-    Logger logger;
     Entry entry;
     Set<Integer> successAdds;
     List<String> ensemble;
@@ -28,7 +30,6 @@ public class PendingAddOp {
 
     public PendingAddOp(ObjectMapper mapper,
                         MessageSender messageSender,
-                        Logger logger,
                         Entry entry,
                         List<String> ensemble,
                         int writeQuorum,
@@ -39,7 +40,6 @@ public class PendingAddOp {
                         AtomicBoolean isCancelled) {
         this.mapper = mapper;
         this.messageSender = messageSender;
-        this.logger = logger;
         this.entry = entry;
         this.ensemble = ensemble;
         this.writeQuorum = writeQuorum;

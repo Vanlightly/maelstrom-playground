@@ -1,6 +1,7 @@
 package com.vanlightly.bookkeeper.bookie;
 
-import com.vanlightly.bookkeeper.Logger;
+import com.vanlightly.bookkeeper.util.LogManager;
+import com.vanlightly.bookkeeper.util.Logger;
 import com.vanlightly.bookkeeper.ReturnCodes;
 import com.vanlightly.bookkeeper.kv.bkclient.BkException;
 import com.vanlightly.bookkeeper.util.DeadlineCollection;
@@ -9,7 +10,7 @@ import java.util.*;
 import java.util.concurrent.CompletableFuture;
 
 public class Ledger {
-    Logger logger;
+    Logger logger = LogManager.getLogger(this.getClass().getName());
     long ledgerId;
     Map<Long, String> entries;
     boolean isFenced;
@@ -17,8 +18,7 @@ public class Ledger {
     DeadlineCollection<LongPollLacRead> lacLongPollReadsByLac;
     DeadlineCollection<LongPollLacRead> lacLongPollReadsByTimeout;
 
-    public Ledger(Logger logger, long ledgerId) {
-        this.logger = logger;
+    public Ledger(long ledgerId) {
         this.ledgerId = ledgerId;
         this.entries = new HashMap<>();
         this.isFenced = false;

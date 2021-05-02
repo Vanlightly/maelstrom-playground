@@ -6,7 +6,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.vanlightly.bookkeeper.kv.*;
 import com.vanlightly.bookkeeper.kv.bkclient.BkException;
-import com.vanlightly.bookkeeper.kv.bkclient.LedgerManager;
 import com.vanlightly.bookkeeper.kv.log.*;
 import com.vanlightly.bookkeeper.metadata.Versioned;
 import com.vanlightly.bookkeeper.network.NetworkIO;
@@ -19,42 +18,39 @@ import java.time.temporal.ChronoUnit;
 import java.util.*;
 
 public class KvStoreNode extends Node {
-    MetadataManager metadataManager;
-    LedgerManager ledgerManager;
-    LogWriter logWriter;
-    LogReader logReader;
-    LogSegmentCloser logSegmentCloser;
-    KvStore kvStore;
-    OpLog opLog;
+    private MetadataManager metadataManager;
+    private LogWriter logWriter;
+    private LogReader logReader;
+    private LogSegmentCloser logSegmentCloser;
+    private KvStore kvStore;
+    private OpLog opLog;
 
-    KvStoreState state;
-    Position cursor;
-    Versioned<String> cachedLeaderId;
-    Position closedAtPosition;
-    Versioned<List<Long>> lastLedgerList;
+    private KvStoreState state;
+    private Position cursor;
+    private Versioned<String> cachedLeaderId;
+    private Position closedAtPosition;
+    private Versioned<List<Long>> lastLedgerList;
 
     private Instant lastUpdatedMetadata;
     private boolean pendingLeaderResult;
 
     /*
         If no KV commands are being received, then NoOp ops are replicated
-        in order to advance the LAC
+        in order to advance the LAC (hmm is this what explicit LAC is for?)
      */
     private Instant lastAppendedNoOp;
     private Position lastPosOfNoOpCheck;
 
     public KvStoreNode(String nodeId,
                        NetworkIO net,
-                       Logger logger,
                        ObjectMapper mapper,
                        ManagerBuilder builder) {
-        super(nodeId, true, net, logger, mapper, builder);
+        super(nodeId, true, net, mapper, builder);
         this.metadataManager = builder.buildMetadataManager(this, isCancelled);
-        this.ledgerManager = builder.buildLedgerManager(this, isCancelled);
         this.lastUpdatedMetadata = Instant.now().minus(1, ChronoUnit.DAYS);
-        this.kvStore = new KvStore(mapper, logger);
-        this.opLog = new OpLog(logger);
-        this.state = new KvStoreState(logger);
+        this.kvStore = new KvStore(mapper);
+        this.opLog = new OpLog();
+        this.state = new KvStoreState();
         this.cursor = new Position(-1L, -1L);
         this.lastPosOfNoOpCheck = new Position(-1L, -1L);
         this.lastAppendedNoOp = Instant.now().minus(1, ChronoUnit.DAYS);
@@ -609,7 +605,6 @@ public class KvStoreNode extends Node {
     private LogWriter newLogWriter() {
         return new LogWriter(builder,
                 mapper,
-                logger,
                 this,
                 (position, op) -> advancedCommittedIndex(position, op));
     }
@@ -617,7 +612,6 @@ public class KvStoreNode extends Node {
     private LogReader newLogReader() {
         return new LogReader(builder,
                 mapper,
-                logger,
                 this,
                 (position, op) -> appendOp(position, op),
                 () -> cursor,
@@ -628,7 +622,6 @@ public class KvStoreNode extends Node {
     private LogReader newCatchupLogReader(long recoveredLedgerId) {
         return new LogReader(builder,
                 mapper,
-                logger,
                 this,
                 (position, op) -> appendOp(position, op),
                 () -> cursor,
@@ -639,7 +632,6 @@ public class KvStoreNode extends Node {
     private LogSegmentCloser newLogSegmentCloser() {
         return new LogSegmentCloser(builder,
                 mapper,
-                logger,
                 this);
     }
 

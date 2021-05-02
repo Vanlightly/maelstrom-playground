@@ -8,6 +8,8 @@ import com.vanlightly.bookkeeper.metadata.LedgerMetadata;
 import com.vanlightly.bookkeeper.metadata.LedgerStatus;
 import com.vanlightly.bookkeeper.metadata.Versioned;
 import com.vanlightly.bookkeeper.util.InvariantViolationException;
+import com.vanlightly.bookkeeper.util.LogManager;
+import com.vanlightly.bookkeeper.util.Logger;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -30,6 +32,7 @@ import java.util.function.Supplier;
     machine housekeeping than the writer.
  */
 public class LogReader extends LogClient {
+    private Logger logger = LogManager.getLogger(this.getClass().getName());
     private LedgerReadHandle readHandle;
     private ReaderSM sm;
     private Supplier<Position> cursorView;
@@ -44,14 +47,12 @@ public class LogReader extends LogClient {
 
     public LogReader(ManagerBuilder builder,
                      ObjectMapper mapper,
-                     Logger logger,
                      MessageSender messageSender,
                      BiConsumer<Position, Op> cursorUpdater,
                      Supplier<Position> cursorView,
                      boolean isCatchUpReader,
                      long upToLedger) {
-        super(builder, mapper, logger,
-                messageSender, cursorUpdater);
+        super(builder, mapper, messageSender, cursorUpdater);
 
         this.lastCheckedMetadata = Instant.now().minus(1, ChronoUnit.DAYS);
         this.pendingMetadata = false;
@@ -177,7 +178,6 @@ public class LogReader extends LogClient {
                         LedgerReadHandle nextLrh = new LedgerReadHandle(mapper,
                                 ledgerManager,
                                 messageSender,
-                                logger,
                                 vlm);
                         if (vlm.getValue().getStatus().equals(LedgerStatus.CLOSED)) {
                             nextLrh.setLastAddConfirmed(vlm.getValue().getLastEntryId());

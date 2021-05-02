@@ -5,12 +5,14 @@ import com.vanlightly.bookkeeper.kv.log.Position;
 import com.vanlightly.bookkeeper.metadata.LedgerMetadata;
 import com.vanlightly.bookkeeper.metadata.Versioned;
 import com.vanlightly.bookkeeper.util.Futures;
+import com.vanlightly.bookkeeper.util.LogManager;
+import com.vanlightly.bookkeeper.util.Logger;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class RecoveryOp {
-    Logger logger;
+    private Logger logger = LogManager.getLogger(this.getClass().getName());
     LedgerReadHandle readHandle;
     LedgerWriteHandle writeHandle;
     int readCount;
@@ -19,12 +21,10 @@ public class RecoveryOp {
     CompletableFuture<Position> callerFuture;
     AtomicBoolean isCancelled;
 
-    public RecoveryOp(Logger logger,
-                      LedgerReadHandle lrh,
+    public RecoveryOp(LedgerReadHandle lrh,
                       LedgerWriteHandle lwh,
                       CompletableFuture<Position> callerFuture,
                       AtomicBoolean isCancelled) {
-        this.logger = logger;
         this.readHandle = lrh;
         this.writeHandle = lwh;
         this.callerFuture = callerFuture;

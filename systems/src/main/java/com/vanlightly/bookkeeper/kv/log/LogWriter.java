@@ -10,6 +10,8 @@ import com.vanlightly.bookkeeper.metadata.LedgerMetadata;
 import com.vanlightly.bookkeeper.metadata.LedgerStatus;
 import com.vanlightly.bookkeeper.metadata.Versioned;
 import com.vanlightly.bookkeeper.util.Futures;
+import com.vanlightly.bookkeeper.util.LogManager;
+import com.vanlightly.bookkeeper.util.Logger;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -27,17 +29,15 @@ import java.util.stream.Collectors;
     not being enough bookies to write, then the writer aborts.
  */
 public class LogWriter extends LogClient {
-
+    private Logger logger = LogManager.getLogger(this.getClass().getName());
     private LedgerWriteHandle writeHandle;
     private Versioned<List<Long>> cachedLedgerList;
 
     public LogWriter(ManagerBuilder managerBuilder,
                      ObjectMapper mapper,
-                     Logger logger,
                      MessageSender messageSender,
                      BiConsumer<Position, Op> cursorUpdater) {
-        super(managerBuilder, mapper, logger,
-                messageSender, cursorUpdater);
+        super(managerBuilder, mapper, messageSender, cursorUpdater);
         this.cachedLedgerList = new Versioned<>(new ArrayList<>(), -1);
     }
 
@@ -113,7 +113,7 @@ public class LogWriter extends LogClient {
                 .thenApply(this::checkForCancellation)
                 .whenComplete((Versioned<LedgerMetadata> vlm, Throwable t) -> {
                     if (t == null) {
-                        writeHandle = new LedgerWriteHandle(mapper, ledgerManager, messageSender, logger, vlm);
+                        writeHandle = new LedgerWriteHandle(mapper, ledgerManager, messageSender, vlm);
                         logger.logDebug("Created new ledger handle for writer");
                         writeHandle.printState();
                         future.complete(null);

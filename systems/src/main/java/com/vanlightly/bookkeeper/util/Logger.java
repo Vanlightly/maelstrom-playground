@@ -1,4 +1,4 @@
-package com.vanlightly.bookkeeper;
+package com.vanlightly.bookkeeper.util;
 
 import com.fasterxml.jackson.databind.JsonNode;
 

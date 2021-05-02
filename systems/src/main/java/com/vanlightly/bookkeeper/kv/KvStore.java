@@ -1,24 +1,22 @@
 package com.vanlightly.bookkeeper.kv;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.vanlightly.bookkeeper.Constants;
 import com.vanlightly.bookkeeper.Fields;
-import com.vanlightly.bookkeeper.Logger;
+import com.vanlightly.bookkeeper.util.LogManager;
+import com.vanlightly.bookkeeper.util.Logger;
 
 import java.util.HashMap;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 public class KvStore {
-    Logger logger;
+    private Logger logger = LogManager.getLogger(this.getClass().getName());
     Map<String, Integer> store;
     ObjectMapper mapper;
 
-    public KvStore(ObjectMapper mapper, Logger logger) {
+    public KvStore(ObjectMapper mapper) {
         this.mapper = mapper;
-        this.logger = logger;
         this.store = new HashMap<>();
     }
 
@@ -27,7 +25,6 @@ public class KvStore {
 
         String key = op.get(Fields.KV.Op.KEY);
         String type = op.get(Fields.KV.Op.TYPE);
-        //body.put(Fields.KV.Op.CMD_TYPE, type);
         body.put(Fields.IN_REPLY_TO, Integer.parseInt(op.get(Fields.MSG_ID)));
 
         switch (type) {

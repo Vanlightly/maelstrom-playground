@@ -1,6 +1,7 @@
 package com.vanlightly.bookkeeper.kv;
 
-import com.vanlightly.bookkeeper.Logger;
+import com.vanlightly.bookkeeper.util.LogManager;
+import com.vanlightly.bookkeeper.util.Logger;
 import com.vanlightly.bookkeeper.kv.log.Position;
 
 import java.util.concurrent.atomic.AtomicInteger;
@@ -33,15 +34,14 @@ public class KvStoreState {
         READY
     }
 
-    private Logger logger;
+    private Logger logger = LogManager.getLogger(this.getClass().getName());
     private AtomicInteger stateCounter;
 
     public Role role;
     public LeaderState leaderState;
     public FollowerState followerState;
 
-    public KvStoreState(Logger logger) {
-        this.logger = logger;
+    public KvStoreState() {
         role = Role.NONE;
         leaderState = LeaderState.NONE;
         followerState = FollowerState.NONE;

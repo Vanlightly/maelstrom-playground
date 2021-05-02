@@ -6,8 +6,9 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.vanlightly.bookkeeper.network.NetworkIO;
 import com.vanlightly.bookkeeper.util.DeadlineCollection;
 import com.vanlightly.bookkeeper.util.Futures;
+import com.vanlightly.bookkeeper.util.LogManager;
+import com.vanlightly.bookkeeper.util.Logger;
 
-import java.lang.reflect.Field;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -24,7 +25,7 @@ public abstract class Node implements MessageSender {
     public final static String MetadataNodeId = "n0";
 
     protected NetworkIO net;
-    protected Logger logger;
+    protected Logger logger = LogManager.getLogger(this.getClass().getName());
     protected SessionManager sessionManager;
     protected ManagerBuilder builder;
     protected ObjectMapper mapper;
@@ -39,13 +40,11 @@ public abstract class Node implements MessageSender {
     public Node(String nodeId,
                 boolean includeSessionManagement,
                 NetworkIO net,
-                Logger logger,
                 ObjectMapper mapper,
                 ManagerBuilder builder) {
         this.nodeId = nodeId;
         this.net = net;
         this.mapper = mapper;
-        this.logger = logger;
         this.isCancelled = new AtomicBoolean();
         this.builder = builder;
 

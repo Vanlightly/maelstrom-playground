@@ -8,14 +8,16 @@ import com.vanlightly.bookkeeper.metadata.LedgerMetadata;
 import com.vanlightly.bookkeeper.metadata.LedgerStatus;
 import com.vanlightly.bookkeeper.metadata.Versioned;
 import com.vanlightly.bookkeeper.util.Futures;
+import com.vanlightly.bookkeeper.util.LogManager;
+import com.vanlightly.bookkeeper.util.Logger;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class LedgerReadHandle {
+    private Logger logger = LogManager.getLogger(this.getClass().getName());
     private ObjectMapper mapper;
-    private Logger logger;
     private MessageSender messageSender;
     private AtomicBoolean isCancelled;
 
@@ -26,12 +28,10 @@ public class LedgerReadHandle {
     public LedgerReadHandle(ObjectMapper mapper,
                         LedgerManager ledgerManager,
                         MessageSender messageSender,
-                        Logger logger,
                         Versioned<LedgerMetadata> versionedMetadata) {
         this.mapper = mapper;
         this.ledgerManager = ledgerManager;
         this.messageSender = messageSender;
-        this.logger = logger;
         // must be a copy as sharing between handles during recovery can cause inconsistency
         this.versionedMetadata = new Versioned<>(versionedMetadata.getValue(),
                 versionedMetadata.getVersion());
@@ -49,11 +49,11 @@ public class LedgerReadHandle {
     }
 
     public void printState() {
-        logger.logInfo("------------ Ledger Read Handle State -------------");
-        logger.logInfo("Ledger metadata version: " + versionedMetadata.getVersion());
-        logger.logInfo("Ledger metadata: " + versionedMetadata.getValue());
-        logger.logInfo("lastAddConfirmed: "+ lastAddConfirmed);
-        logger.logInfo("----------------------------------------------");
+        logger.logInfo("------------ Ledger Read Handle State -------------" + System.lineSeparator()
+            + "Ledger metadata version: " + versionedMetadata.getVersion() + System.lineSeparator()
+            + "Ledger metadata: " + versionedMetadata.getValue() + System.lineSeparator()
+            + "lastAddConfirmed: "+ lastAddConfirmed + System.lineSeparator()
+            + "----------------------------------------------");
     }
 
     public Versioned<LedgerMetadata> getCachedLedgerMetadata() {

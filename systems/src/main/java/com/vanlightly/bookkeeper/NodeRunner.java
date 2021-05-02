@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vanlightly.bookkeeper.network.NetworkIO;
 import com.vanlightly.bookkeeper.network.StdInOutNetwork;
+import com.vanlightly.bookkeeper.util.Logger;
 
 public class NodeRunner {
 
@@ -96,22 +97,21 @@ public class NodeRunner {
 
     private Node buildNode(JsonNode msg, NetworkIO net, ObjectMapper mapper) {
         String nodeId = msg.get(Fields.BODY).get("node_id").asText();
-        Logger logger = new StdErrLogger();
         NodeType nodeType = Node.determineType(nodeId);
 
         Node node;
 
         if (nodeType == NodeType.MetadataStore) {
-            node = new MetadataStoreNode(String.valueOf(nodeId), net, logger, mapper, null);
+            node = new MetadataStoreNode(nodeId, net, mapper, null);
             System.err.println("Built metadata store node " + nodeId);
         } else {
-            ManagerBuilder builder = new ManagerBuilderImpl(mapper, logger);
+            ManagerBuilder builder = new ManagerBuilderImpl(mapper);
 
             if (nodeType == NodeType.KvStore) {
-                node = new KvStoreNode(nodeId, net, logger, mapper, builder);
+                node = new KvStoreNode(nodeId, net, mapper, builder);
                 System.err.println("Built bk client node " + nodeId);
             } else {
-                node = new BookieNode(nodeId, net, logger, mapper, builder);
+                node = new BookieNode(nodeId, net, mapper, builder);
                 System.err.println("Built bookie node " + nodeId);
             }
         }

@@ -1,10 +1,9 @@
 package com.vanlightly.bookkeeper;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.vanlightly.bookkeeper.Logger;
+import com.vanlightly.bookkeeper.util.Logger;
 import com.vanlightly.bookkeeper.kv.bkclient.BkException;
 
-import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.concurrent.CompletionException;
@@ -17,6 +16,12 @@ public class StdErrLogger implements Logger {
     public static final int ERROR = 2;
     public static int LogLevel = ERROR;
     private static DateTimeFormatter dtf = DateTimeFormatter.ofPattern("HH:mm:ss.SSS");
+
+    private String component;
+
+    public StdErrLogger(String component) {
+        this.component = component;
+    }
 
     @Override
     public void logDebug(String text) {
@@ -96,14 +101,15 @@ public class StdErrLogger implements Logger {
         }
     }
 
-    private static void print(String level, String text) {
+    private void print(String level, String text) {
         System.err.println(Thread.currentThread().getName()
-                + " " + getTime()
-                + " " + level
-                + ": " + text);
+                + " : " + getTime()
+                + " : " + component
+                + " : " + level
+                + " : " + text);
     }
 
-    private static String getTime() {
+    private String getTime() {
         LocalDateTime now = LocalDateTime.now();
         return dtf.format(now);
     }

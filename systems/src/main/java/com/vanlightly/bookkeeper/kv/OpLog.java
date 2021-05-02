@@ -1,6 +1,7 @@
 package com.vanlightly.bookkeeper.kv;
 
-import com.vanlightly.bookkeeper.Logger;
+import com.vanlightly.bookkeeper.util.LogManager;
+import com.vanlightly.bookkeeper.util.Logger;
 import com.vanlightly.bookkeeper.util.InvariantViolationException;
 
 import java.util.ArrayList;
@@ -8,7 +9,7 @@ import java.util.List;
 import java.util.Map;
 
 public class OpLog {
-    private Logger logger;
+    private Logger logger = LogManager.getLogger(this.getClass().getName());
     private List<Op> log;
     private List<Op> tempLog;
     private int replicateIndex;
@@ -16,8 +17,7 @@ public class OpLog {
     private int appliedIndex;
     private long idSource;
 
-    public OpLog(Logger logger) {
-        this.logger = logger;
+    public OpLog() {
         log = new ArrayList<>();
         tempLog = new ArrayList<>();
         replicateIndex = -1;
