@@ -67,10 +67,6 @@ public class PendingAddOp {
         body.put(Fields.L.LAC, lh.getLastAddConfirmed());
         body.put(Fields.L.RECOVERY, isRecoveryAdd);
 
-        if (entry.getValue() == "") {
-            throw new InvariantViolationException("Empty value!");
-        }
-
         String bookieId = ensemble.get(bookieIndex);
         logger.logDebug("Send ADD to bookie: " + bookieId + " index: " + bookieIndex
                 + " of ensemble: " + ensemble);

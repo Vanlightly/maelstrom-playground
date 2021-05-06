@@ -160,7 +160,13 @@ public class LogReader extends LogClient {
         if (sm.state == State.IDLE
                 && ledgerIsClosed()
                 && cursorView.get().getLedgerId() == readHandle.getLedgerId()
-                && cursorView.get().getEntryId() == lm().getLastEntryId()) {
+                && cursorView.get().getEntryId() >= lm().getLastEntryId()) {
+            /*
+                Note that entryId >= last entry id is necessary in case of a log truncation, where
+                entry id can be > last entry id. This is an invariant and detected when invariant checking
+                is enabled, but when disabled, we want the reader to carry on.
+            */
+
             sm.changeState(State.NO_LEDGER);
             logger.logDebug("Reader has reached the end of ledger " + cursorView.get().getLedgerId()
                 + " entry " + cursorView.get().getEntryId());
@@ -496,8 +502,10 @@ public class LogReader extends LogClient {
     }
 
     private boolean isInIllegalState() {
+        // this simply catches the situation where the reader is idle but no action is enabled
+        // this is simply a programming error. Leaving it in in case I accidentally make it happen again.
         if (sm.state == State.IDLE) {
-            logger.logInvariantViolation("Cannot be in IDLE state without matching action", "TEMP");
+            logger.logInvariantViolation("Cannot be in IDLE state without matching action", Invariants.BAD_STATE_MACHINE);
             printState();
             throw new InvariantViolationException("Cannot be in IDLE state without matching action");
         } else {
@@ -522,7 +530,9 @@ public class LogReader extends LogClient {
     }
 
     private void checkInvariants() {
-        checkLedgerTruncated();
+        if (Config.CheckInvariants) {
+            checkLedgerTruncated();
+        }
     }
 
     private void checkLedgerTruncated() {

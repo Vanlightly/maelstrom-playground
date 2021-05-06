@@ -1,5 +1,6 @@
 package com.vanlightly.bookkeeper.kv;
 
+import com.vanlightly.bookkeeper.Config;
 import com.vanlightly.bookkeeper.util.LogManager;
 import com.vanlightly.bookkeeper.util.Logger;
 import com.vanlightly.bookkeeper.util.InvariantViolationException;
@@ -192,8 +193,10 @@ public class OpLog {
     }
 
     private void checkLocalInvariants() {
-        noUncommittedOpBelowCommittedIndex();
-        opIdsAreContiguous();
+        if (Config.CheckInvariants) {
+            noUncommittedOpBelowCommittedIndex();
+            opIdsAreContiguous();
+        }
     }
 
     private void noUncommittedOpBelowCommittedIndex() {

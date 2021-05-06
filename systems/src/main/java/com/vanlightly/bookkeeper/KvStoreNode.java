@@ -227,7 +227,8 @@ public class KvStoreNode extends Node {
                                 state.changeLeaderState(KvStoreState.LeaderState.START_SEQ_5_NEED_CATCHUP_READER, cursor);
                                 closedAtPosition = closedAtPos;
 
-                                if (closedAtPosition.getLedgerId() == cursor.getLedgerId()
+                                if (Config.CheckInvariants
+                                        && closedAtPosition.getLedgerId() == cursor.getLedgerId()
                                         && closedAtPosition.getEntryId() < cursor.getEntryId()) {
                                     logger.logInvariantViolation("The writer cursor is ahead of the closed segment last entry. "
                                             + " Cursor: " + cursor

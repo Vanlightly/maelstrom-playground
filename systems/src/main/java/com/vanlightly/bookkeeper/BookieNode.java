@@ -111,8 +111,6 @@ public class BookieNode extends Node {
 
         logger.logDebug("ADD for ledger: " + ledgerId + " entry: " + entryId
                 + " from: " + msg.get(Fields.SOURCE).asText());
-
-        checkLocalInvariants();
     }
 
     private void handleReadEntry(JsonNode msg) {
@@ -275,17 +273,6 @@ public class BookieNode extends Node {
         }
 
         return true;
-    }
-
-    private void checkLocalInvariants() {
-        for (Ledger ledger : ledgers.values()) {
-            for (Map.Entry<Long,String> entry : ledger.getEntries().entrySet()) {
-                if (entry.getValue().equals("")) {
-                    throw new InvariantViolationException("Empty entry found in ledger: " + ledger.getLedgerId()
-                    + " entry: " + entry.getKey());
-                }
-            }
-        }
     }
 
     private Ledger getLedger(long ledgerId) {

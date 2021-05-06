@@ -97,10 +97,6 @@ public class LedgerWriteHandle {
     private CompletableFuture<Entry> addEntry(String value, boolean isRecoveryAdd) {
         CompletableFuture<Entry> future = new CompletableFuture<>();
 
-        if (value == "") {
-            throw new InvariantViolationException("Empty value!");
-        }
-
         lastAddPushed++;
         Entry entry = new Entry(lm().getLedgerId(), lastAddPushed, value);
         PendingAddOp addOp = new PendingAddOp(
