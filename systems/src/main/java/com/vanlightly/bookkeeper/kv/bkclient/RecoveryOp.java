@@ -12,7 +12,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class RecoveryOp {
-    private Logger logger = LogManager.getLogger(this.getClass().getName());
+    private Logger logger = LogManager.getLogger(this.getClass().getSimpleName());
     private LedgerReadHandle readHandle;
     private LedgerWriteHandle writeHandle;
     private int readCount;
@@ -66,12 +66,12 @@ public class RecoveryOp {
                         return Futures.failedFuture(new BkException("Couldn't fence enough bookies to progress", lacResult.getCode()));
                     }
                 })
-                .whenComplete((Position pos, Throwable t1) -> {
+                .whenComplete((Position pos, Throwable t) -> {
                     // have now read up to as far as we can go, or an error has occurred
                     if (isCancelled.get()) {
                         completeExceptionally(new OperationCancelledException());
-                    } else if (t1 != null) {
-                        completeExceptionally(t1);
+                    } else if (t != null) {
+                        completeExceptionally(t);
                     } else {
                         // we reached the end of the ledger, there still may be
                         // some write results pending, but if not then close the ledger now
@@ -138,9 +138,12 @@ public class RecoveryOp {
                             // the previous read was the last good entry
                             return CompletableFuture.completedFuture(prev);
                         } else {
-                            // we don't know if the current entry exists or not
+                            // we don't know if the current entry exists or not so we cannot make progress
+                            // safely. Cancel and return "too many unknown" code.
                             logger.logDebug("Read " + readCount + " unknown, cannot make progress. "
                                     + "Last successful entry is: " + prev);
+                            readHandle.cancel();
+                            writeHandle.cancel();
                             throw new BkException("Too many unknown responses", ReturnCodes.Ledger.UNKNOWN);
                         }
                     }
@@ -150,12 +153,12 @@ public class RecoveryOp {
     private void closeLedger() {
         logger.logDebug("Closing the ledger");
         writeHandle.close()
-            .whenComplete((Versioned<LedgerMetadata> vlm, Throwable t2) -> {
+            .whenComplete((Versioned<LedgerMetadata> vlm, Throwable t) -> {
                 if (isCancelled.get()) {
                     completeExceptionally(new OperationCancelledException());
-                } else if (t2 != null) {
-                    logger.logError("Failed to close the ledger", t2);
-                    completeExceptionally(t2);
+                } else if (t != null) {
+                    logger.logError("Failed to close the ledger", t);
+                    completeExceptionally(t);
                 } else {
                     logger.logDebug("Ledger closed");
                     complete();

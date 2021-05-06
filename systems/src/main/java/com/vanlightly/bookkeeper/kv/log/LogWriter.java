@@ -29,7 +29,7 @@ import java.util.stream.Collectors;
     not being enough bookies to write, then the writer aborts.
  */
 public class LogWriter extends LogClient {
-    private Logger logger = LogManager.getLogger(this.getClass().getName());
+    private Logger logger = LogManager.getLogger(this.getClass().getSimpleName());
     private LedgerWriteHandle writeHandle;
     private Versioned<List<Long>> cachedLedgerList;
 

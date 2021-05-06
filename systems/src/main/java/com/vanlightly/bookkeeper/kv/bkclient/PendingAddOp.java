@@ -4,17 +4,16 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.vanlightly.bookkeeper.*;
-import com.vanlightly.bookkeeper.util.InvariantViolationException;
-import com.vanlightly.bookkeeper.util.LogManager;
-import com.vanlightly.bookkeeper.util.Logger;
-import com.vanlightly.bookkeeper.util.MsgMapping;
+import com.vanlightly.bookkeeper.util.*;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static com.vanlightly.bookkeeper.util.Futures.Delay;
+
 public class PendingAddOp {
-    private Logger logger = LogManager.getLogger(this.getClass().getName());
+    private Logger logger = LogManager.getLogger(this.getClass().getSimpleName());
     private ObjectMapper mapper = MsgMapping.getMapper();
     private Entry entry;
     private Set<Integer> successAdds;
@@ -51,8 +50,12 @@ public class PendingAddOp {
     }
 
     public void begin() {
+        // TODO: REMOVE => use delays to increase probability of read/write overlap
         for (int i=0; i<writeQuorum; i++) {
-            sendAddEntryRequest(i);
+            int finalI = i;
+            Delay.apply(100*i).thenRun(() -> {
+                sendAddEntryRequest(finalI);
+            });
         }
     }
 

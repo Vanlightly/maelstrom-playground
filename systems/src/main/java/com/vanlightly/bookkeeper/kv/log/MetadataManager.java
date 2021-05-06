@@ -17,7 +17,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class MetadataManager {
-    private Logger logger = LogManager.getLogger(this.getClass().getName());
+    private Logger logger = LogManager.getLogger(this.getClass().getSimpleName());
     private ObjectMapper mapper = MsgMapping.getMapper();
     private SessionManager sessionManager;
     private MessageSender messageSender;

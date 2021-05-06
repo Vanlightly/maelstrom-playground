@@ -9,9 +9,10 @@ public class Constants {
     }
 
     public class KeepAlives {
-        public static final long KeepAliveIntervalMs = 50;
-        public static final long KeepAliveExpiryMs = 100;
-        public static final long KeepAliveCheckMs = 10;
+        public static final long LoseKeepAlivesAfterMs = 2500;
+        public static final long KeepAliveIntervalMs = 200;
+        public static final long KeepAliveExpiryMs = 1500;
+        public static final long KeepAliveCheckMs = 100;
     }
 
     public class Timeouts {
@@ -27,11 +28,11 @@ public class Constants {
     }
 
     public static class KvStore {
-        public static final int CheckLeadershipIntervalMs = 500;
-        public static final int ReaderUpdateMetadataIntervalMs = 1000;
+        public static final int CheckLeadershipIntervalMs = 2000;
+        public static final int ReaderUpdateMetadataIntervalMs = 2000;
         public static final int MaxMsSinceLastOp = 1000;
-        public static final int LongPollTimeoutMs = 500;
-        public static final int LongPollResponseTimeoutMs = 1000;
+        public static final int LongPollTimeoutMs = 1000;
+        public static final int LongPollResponseTimeoutMs = 2000;
 
 
         public static class Ops {

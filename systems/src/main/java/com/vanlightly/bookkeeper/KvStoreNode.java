@@ -44,7 +44,7 @@ public class KvStoreNode extends Node {
     public KvStoreNode(String nodeId,
                        NetworkIO net,
                        ManagerBuilder builder) {
-        super(nodeId, true, net, builder);
+        super(nodeId, NodeType.KvStore,true, net, builder);
         this.metadataManager = builder.buildMetadataManager(this, isCancelled);
         this.lastUpdatedMetadata = Instant.now().minus(1, ChronoUnit.DAYS);
         this.kvStore = new KvStore();
@@ -562,11 +562,12 @@ public class KvStoreNode extends Node {
 
     void printState() {
         logger.logInfo("----------------- KV Store Node -------------");
-        logger.logInfo("Role: " + state.role);
-        logger.logInfo("Leader state: " + state.leaderState);
-        logger.logInfo("Follower state: " + state.followerState);
-        logger.logInfo("Cursor: " + cursor);
-        logger.logInfo("Cached leader. Version: " + cachedLeaderId.getVersion() + " Node: " + cachedLeaderId.getValue());
+        logger.logInfo("Role: " + state.role + System.lineSeparator()
+            + "Leader state: " + state.leaderState + System.lineSeparator()
+            + "Follower state: " + state.followerState + System.lineSeparator()
+            + "Cursor: " + cursor + System.lineSeparator()
+            + "Cached leader. Version: " + cachedLeaderId.getVersion()
+                        + " Node: " + cachedLeaderId.getValue() + System.lineSeparator());
 
         opLog.printState();
         kvStore.printState();

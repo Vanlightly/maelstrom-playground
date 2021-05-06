@@ -9,7 +9,7 @@ import java.util.List;
 import java.util.Map;
 
 public class OpLog {
-    private Logger logger = LogManager.getLogger(this.getClass().getName());
+    private Logger logger = LogManager.getLogger(this.getClass().getSimpleName());
     private List<Op> log;
     private List<Op> tempLog;
     private int replicateIndex;
@@ -27,24 +27,27 @@ public class OpLog {
     }
 
     public void printState() {
-        logger.logInfo("----------------- OpLog State -------------");
-        logger.logInfo("OpLog. replicateIndex: " + replicateIndex
+        StringBuilder sb = new StringBuilder();
+        sb.append("----------------- OpLog State -------------" + System.lineSeparator());
+        sb.append("OpLog. replicateIndex: " + replicateIndex
             + " commitIndex: " + commitIndex
-            + " appliedIndex: " + appliedIndex);
-        logger.logInfo("Log items:");
+            + " appliedIndex: " + appliedIndex + System.lineSeparator());
+        sb.append("Log items:");
         int index = 0;
         for (Op op : log) {
-            logger.logInfo(index + " -> " + Op.opToString(op) + " committed: " + op.isCommitted());
+            sb.append(index + " -> " + Op.opToString(op) + " committed: "
+                    + op.isCommitted() + System.lineSeparator());
             index++;
         }
 
-        logger.logInfo("Temp Log items:");
+        sb.append("Temp Log items:" + System.lineSeparator());
         index = 0;
         for (Op tmpOp : tempLog) {
-            logger.logInfo(index + " -> " + Op.opToString(tmpOp));
+            sb.append(index + " -> " + Op.opToString(tmpOp) + System.lineSeparator());
             index++;
         }
-        logger.logInfo("-------------------------------------------");
+        sb.append("-------------------------------------------");
+        logger.logInfo(sb.toString());
     }
 
     /*

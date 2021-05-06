@@ -34,7 +34,7 @@ public class KvStoreState {
         READY
     }
 
-    private Logger logger = LogManager.getLogger(this.getClass().getName());
+    private Logger logger = LogManager.getLogger(this.getClass().getSimpleName());
     private AtomicInteger stateCounter;
 
     public Role role;

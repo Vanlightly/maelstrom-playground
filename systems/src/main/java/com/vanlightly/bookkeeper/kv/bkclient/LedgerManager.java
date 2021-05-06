@@ -18,7 +18,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class LedgerManager {
-    private Logger logger = LogManager.getLogger(this.getClass().getName());
+    private Logger logger = LogManager.getLogger(this.getClass().getSimpleName());
     private ObjectMapper mapper = MsgMapping.getMapper();
     private SessionManager sessionManager;
     private MessageSender messageSender;
@@ -188,6 +188,9 @@ public class LedgerManager {
 
         sessionManager.getSessionId()
                 .thenCompose((sessionId) -> {
+                    logger.logDebug("Sending " + command + " request with version: "
+                            + version + " metadata: " + ledgerMetadata);
+
                     ObjectNode body = mapper.createObjectNode();
                     body.put(Fields.SESSION_ID, sessionId);
                     if (version > -1L) {

@@ -10,7 +10,7 @@ import java.util.*;
 import java.util.concurrent.CompletableFuture;
 
 public class Ledger {
-    Logger logger = LogManager.getLogger(this.getClass().getName());
+    Logger logger = LogManager.getLogger(this.getClass().getSimpleName());
     long ledgerId;
     Map<Long, String> entries;
     boolean isFenced;

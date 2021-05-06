@@ -49,8 +49,8 @@ public class NodeRunner {
     }
 
     private boolean nextAction() throws JsonProcessingException {
-        return node.handleTimeout()
-                || node.resumeDelayedTask()
+        return node.resumeDelayedTask()
+                || node.handleTimeout()
                 || node.roleSpecificAction()
                 || handleIncomingMsg();
     }

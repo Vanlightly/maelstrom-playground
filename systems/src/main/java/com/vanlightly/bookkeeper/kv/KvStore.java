@@ -12,7 +12,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class KvStore {
-    private Logger logger = LogManager.getLogger(this.getClass().getName());
+    private Logger logger = LogManager.getLogger(this.getClass().getSimpleName());
     private ObjectMapper mapper = MsgMapping.getMapper();
     private Map<String, Integer> store;
 
@@ -72,9 +72,9 @@ public class KvStore {
     }
 
     public void printState() {
-        logger.logInfo("----------------- KV State -------------");
-        logger.logDebug(store.toString());
-        logger.logInfo("----------------------------------------");
+        logger.logInfo("----------------- KV State -------------" + System.lineSeparator()
+            + store.toString() + System.lineSeparator()
+            + "----------------------------------------");
     }
 
 }

@@ -22,7 +22,7 @@ public class BookieNode extends Node {
     public BookieNode(String nodeId,
                       NetworkIO net,
                       ManagerBuilder builder) {
-        super(nodeId, true, net, builder);
+        super(nodeId, NodeType.Bookie, true, net, builder);
         ledgers = new HashMap<>();
         lastCheckedExpiredReads = Instant.now().minus(1, ChronoUnit.DAYS);
     }
@@ -73,12 +73,15 @@ public class BookieNode extends Node {
     }
 
     void printState() {
-        logger.logInfo("----------- Bookie State --------------------");
-        logger.logInfo("Ledgers:");
+        StringBuilder sb = new StringBuilder();
+        sb.append("----------- Bookie State --------------------" + System.lineSeparator());
+        sb.append("Ledgers:" + System.lineSeparator() + System.lineSeparator());
         for (Map.Entry<Long,Ledger> ledger : ledgers.entrySet()) {
-            logger.logInfo(ledger.getValue().toString());
+            sb.append(ledger.getValue().toString() + System.lineSeparator());
         }
-        logger.logInfo("---------------------------------------------");
+        sb.append("---------------------------------------------");
+
+        logger.logInfo(sb.toString());
     }
 
     private boolean mayBeRedirect(JsonNode request) {

@@ -1,6 +1,5 @@
 package com.vanlightly.bookkeeper.kv.bkclient;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vanlightly.bookkeeper.*;
 import com.vanlightly.bookkeeper.metadata.LedgerMetadata;
 import com.vanlightly.bookkeeper.metadata.LedgerStatus;
@@ -12,8 +11,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class LedgerWriteHandle {
-    private Logger logger = LogManager.getLogger(this.getClass().getName());
-    private ObjectMapper mapper = MsgMapping.getMapper();
+    private Logger logger = LogManager.getLogger(this.getClass().getSimpleName());
     private MessageSender messageSender;
     private AtomicBoolean isCancelled;
 
@@ -54,22 +52,18 @@ public class LedgerWriteHandle {
     }
 
     public void printState() {
-        logger.logInfo("------------ Ledger Write Handle State -------------");
-        logger.logInfo("Ledger metadata version: " + versionedMetadata.getVersion());
-        logger.logInfo("Ledger metadata: " + versionedMetadata.getValue());
-        logger.logInfo("pendingAddsSequenceHead: "+ pendingAddsSequenceHead);
-        logger.logInfo("lastAddPushed: "+ lastAddPushed);
-        logger.logInfo("lastAddConfirmed: "+ lastAddConfirmed);
-        logger.logInfo("changingEnsemble: "+ changingEnsemble);
-        logger.logInfo("----------------------------------------------");
+        logger.logInfo("------------ Ledger Write Handle State -------------" + System.lineSeparator()
+            + "Ledger metadata version: " + versionedMetadata.getVersion() + System.lineSeparator()
+            + "Ledger metadata: " + versionedMetadata.getValue() + System.lineSeparator()
+            + "pendingAddsSequenceHead: "+ pendingAddsSequenceHead + System.lineSeparator()
+            + "lastAddPushed: "+ lastAddPushed + System.lineSeparator()
+            + "lastAddConfirmed: "+ lastAddConfirmed + System.lineSeparator()
+            + "changingEnsemble: "+ changingEnsemble
+            + "----------------------------------------------");
     }
 
     public Versioned<LedgerMetadata> getCachedLedgerMetadata() {
         return versionedMetadata;
-    }
-
-    public void setCachedLedgerMetadata(Versioned<LedgerMetadata> updatedMetadata) {
-        versionedMetadata = updatedMetadata;
     }
 
     public long getLedgerId() {
@@ -134,12 +128,6 @@ public class LedgerWriteHandle {
         }
     }
 
-    void updateLac(long entryId) {
-        if (entryId > lastAddConfirmed) {
-            lastAddConfirmed = entryId;
-        }
-    }
-
     public CompletableFuture<Versioned<LedgerMetadata>> close() {
         if (pendingClose) {
             CompletableFuture<Versioned<LedgerMetadata>> future = new CompletableFuture<>();
@@ -151,9 +139,9 @@ public class LedgerWriteHandle {
     }
 
     private CompletableFuture<Versioned<LedgerMetadata>> closeInternal(String rc) {
-        logger.logDebug("LedgerWriteHandle : closing ledger");
+        logger.logDebug("Closing ledger: " + getLedgerId());
         if (lm().getStatus() == LedgerStatus.CLOSED) {
-            logger.logDebug("Ledger already closed");
+            logger.logDebug("Ledger " + getLedgerId() + " already closed");
             closeFutures.stream().forEach(f -> f.complete(versionedMetadata));
             return CompletableFuture.completedFuture(versionedMetadata);
         }
@@ -163,13 +151,14 @@ public class LedgerWriteHandle {
         lm().setLastEntryId(lastAddConfirmed);
         errorOutPendingAdds(rc);
 
-        logger.logDebug("LedgerWriteHandle : Sending metadata update with closed status for ledger: " + lm().getLedgerId());
-        return ledgerManager.updateLedgerMetadata(versionedMetadata)
+        logger.logDebug("Sending metadata update with closed status for ledger: " + getLedgerId());
+        return updateMetadataStore(versionedMetadata)
                 .whenComplete((Versioned<LedgerMetadata> vlm, Throwable t) -> {
                     if (t != null) {
-                        logger.logError("LedgerWriteHandle : Ledger Close failed", t);
+                        logger.logError("Ledger Close failed", t);
                     } else {
-                        logger.logDebug("LedgerWriteHandle : Ledger Close completed");
+                        versionedMetadata = vlm;
+                        logger.logDebug("Ledger Close completed");
                     }
 
                     for (CompletableFuture<Versioned<LedgerMetadata>> future : closeFutures) {
@@ -196,7 +185,7 @@ public class LedgerWriteHandle {
     }
 
     private void errorOutPendingAdds(String rc, List<PendingAddOp> ops) {
-        logger.logDebug("LedgerWriteHandle : Erroring " + ops.size() + " pending adds with code: " + rc);
+        logger.logDebug("Erroring " + ops.size() + " pending adds with code: " + rc);
         for (PendingAddOp op : ops) {
             op.completeCallerFuture(rc);
         }
@@ -238,40 +227,61 @@ public class LedgerWriteHandle {
         }
     }
 
+    private CompletableFuture<Versioned<LedgerMetadata>> updateMetadataStore(Versioned<LedgerMetadata> vlm) {
+        return ledgerManager.updateLedgerMetadata(vlm)
+                .thenApply(this::checkForCancellation)
+                .thenApply((Versioned<LedgerMetadata> vlmUpdated) -> {
+                    logger.logDebug("Metadata updated in metadata store. New: "
+                            + vlmUpdated.getValue()
+                            + " From: " + versionedMetadata.getValue());
+
+                    return vlmUpdated;
+                });
+    }
+
     private void changeEnsemble(Map<Integer, String> failedBookies) {
+        boolean closeLedgerOnFail = lm().getStatus() == LedgerStatus.OPEN;
+
+        chooseNewEnsemble(failedBookies, versionedMetadata)
+                .whenComplete((Void v, Throwable t) -> {
+                    changingEnsemble = false;
+
+                    if (t != null) {
+                        ensembleChangeFailed(t, closeLedgerOnFail);
+                    }
+                });
+    }
+
+    private CompletableFuture<Void> chooseNewEnsemble(Map<Integer, String> failedBookies,
+                                                      Versioned<LedgerMetadata> vlm) {
         Map<Integer, String> bookiesToReplace = validFailedBookies(failedBookies);
         if (bookiesToReplace.isEmpty()) {
-            logger.logDebug("LedgerWriteHandle : Ignoring bookie write failure for bookie that is no longer a member of the current ensemble");
-            return;
+            logger.logDebug("Ensemble changed cancelled - Ignoring bookie write failure for bookie that is no longer a member of the current ensemble");
+            throw new OperationCancelledException();
         } else if (lm().getStatus() == LedgerStatus.CLOSED) {
-            logger.logDebug("LedgerWriteHandle : Ensemble changed cancelled - ledger already closed");
-            return;
+            logger.logDebug("Ensemble changed cancelled - ledger already closed");
+            throw new BkException("Ledger already closed", ReturnCodes.Ledger.LEDGER_CLOSED);
         }
-
-        logger.logDebug("LedgerWriteHandle : Changing the ensemble due to failure in bookies: " + bookiesToReplace.values());
-        changingEnsemble = true;
 
         // work on a copy and replace it at the end
         Versioned<LedgerMetadata> copyOfMetadata = new Versioned<>(
-                new LedgerMetadata(lm()), versionedMetadata.getVersion());
+                new LedgerMetadata(vlm.getValue()), vlm.getVersion());
 
-        ledgerManager.getAvailableBookies()
+        logger.logDebug("Starting ensemble change due to failure in bookies: " + bookiesToReplace.values());
+        changingEnsemble = true;
+
+        return ledgerManager.getAvailableBookies()
                 .thenApply(this::checkForCancellation)
                 .thenCompose((List<String> availableBookies) -> {
-                    logger.logDebug("LedgerWriteHandle : Available bookies: " + availableBookies);
+                    logger.logDebug("Available bookies: " + availableBookies);
                     availableBookies.removeAll(copyOfMetadata.getValue().getCurrentEnsemble());
-                    logger.logDebug("LedgerWriteHandle : Available bookies not in current ensemble: " + availableBookies);
+                    logger.logDebug("Available bookies not in current ensemble: " + availableBookies);
                     if (availableBookies.size() < bookiesToReplace.size()) {
-                        logger.logError("LedgerWriteHandle : Couldn't add a new ensemble, not enough bookies");
-                        if (lm().getStatus() == LedgerStatus.IN_RECOVERY) {
-                            // don't close if we're in recovery, else we'd truncate data
-                            return Futures.failedFuture(new BkException("Not enough bookies to change the ensemble",
-                                    ReturnCodes.Bookie.NOT_ENOUGH_BOOKIES));
-                        } else {
-                            return closeInternal(ReturnCodes.Bookie.NOT_ENOUGH_BOOKIES);
-                        }
+                        logger.logError("Couldn't add a new ensemble, not enough bookies");
+                        throw new BkException("Not enough bookies for ensemble change",
+                                    ReturnCodes.Bookie.NOT_ENOUGH_BOOKIES);
                     } else {
-                        logger.logDebug("LedgerWriteHandle : Enough available bookies");
+                        logger.logDebug("Enough available bookies for ensemble change");
                         Collections.shuffle(availableBookies);
                         Set<Integer> replacedBookieIndices = new HashSet<>();
 
@@ -285,39 +295,47 @@ public class LedgerWriteHandle {
                         }
 
                         if (lastAddConfirmed + 1 == copyOfMetadata.getValue().getEnsembles().lastKey()) {
-                            logger.logDebug("LedgerWriteHandle : Replacing last ensemble: "
+                            logger.logDebug("Replacing last ensemble: "
                                     + copyOfMetadata.getValue().getCurrentEnsemble()
                                     + " with new ensemble: " + newEnsemble);
                             copyOfMetadata.getValue().replaceCurrentEnsemble(newEnsemble);
                         } else {
-                            logger.logDebug("LedgerWriteHandle : Appending new ensemble: " + newEnsemble);
+                            logger.logDebug("Appending new ensemble: " + newEnsemble);
                             copyOfMetadata.getValue().addEnsemble(lastAddConfirmed + 1, newEnsemble);
                         }
 
-                        return ledgerManager.updateLedgerMetadata(copyOfMetadata)
-                                .thenApply(this::checkForCancellation)
-                                .thenApply((Versioned<LedgerMetadata> vlm) -> {
-                                    logger.logDebug("LedgerWriteHandle : Metadata updated. Current ensemble: "
-                                            + vlm.getValue().getCurrentEnsemble()
-                                            + " From: " + versionedMetadata.getValue().getCurrentEnsemble());
-                                    versionedMetadata = vlm;
-                                    unsetSuccessAndSendWriteRequest(newEnsemble, replacedBookieIndices);
-
-                                    return versionedMetadata;
-                                });
+                        /*
+                            If we're in recovery then we do not update the ensemble now as else it
+                            can affect the recovery reads and cause the ledger to be truncated.
+                            If the ledger is open, then we commit the ensemble change and then update any
+                            pending add ops of the ensemble change.
+                         */
+                        if (copyOfMetadata.getValue().getStatus() == LedgerStatus.IN_RECOVERY) {
+                            logger.logDebug("Ensemble changed locally only for recovery writer. Current ensemble: "
+                                    + copyOfMetadata.getValue().getCurrentEnsemble()
+                                    + " From: " + versionedMetadata.getValue().getCurrentEnsemble());
+                            versionedMetadata = copyOfMetadata;
+                            unsetSuccessAndSendWriteRequest(newEnsemble, replacedBookieIndices);
+                            return CompletableFuture.completedFuture(null);
+                        } else {
+                            return updateMetadataStore(copyOfMetadata)
+                                    .thenAccept((Versioned<LedgerMetadata> updatedVlm) -> {
+                                        versionedMetadata = updatedVlm;
+                                        unsetSuccessAndSendWriteRequest(newEnsemble, replacedBookieIndices);
+                                        logger.logDebug("Ensemble change updated in store and pending adds updated");
+                                    });
+                        }
                     }
                 })
-                .whenComplete((Versioned<LedgerMetadata> vlm, Throwable t) -> {
-                    changingEnsemble = false;
-
-                    if (t != null) {
-                        ensembleChangeFailed(t);
-                    } else if (!delayedWriteFailedBookies.isEmpty() && delayedWriteFailedBookies.values().stream()
-                            .anyMatch(x -> vlm.getValue().getCurrentEnsemble().contains(x))) {
-                        logger.logInfo("LedgerWriteHandle : More failed bookies during last ensemble change. Triggered new ensemble change.");
-                        changeEnsemble(delayedWriteFailedBookies);
+                .thenCompose((Void v) -> {
+                    if (!delayedWriteFailedBookies.isEmpty() && delayedWriteFailedBookies.values().stream()
+                            .anyMatch(x -> versionedMetadata.getValue().getCurrentEnsemble().contains(x))) {
+                        logger.logInfo("More failed bookies during last ensemble change. Triggered new ensemble change.");
+                        return chooseNewEnsemble(delayedWriteFailedBookies, versionedMetadata);
                     } else {
-                        logger.logDebug("LedgerWriteHandle : Ensemble change complete");
+                        delayedWriteFailedBookies.clear();
+                        logger.logDebug("Ensemble change completed successfully");
+                        return CompletableFuture.completedFuture(null);
                     }
                 });
     }
@@ -338,20 +356,33 @@ public class LedgerWriteHandle {
         return toReplace;
     }
 
-    private void ensembleChangeFailed(Throwable t) {
-        if (Futures.unwrap(t) instanceof MetadataException) {
-            MetadataException me = (MetadataException) Futures.unwrap(t);
-            errorOutPendingAdds(me.getCode());
-            logger.logError("LedgerWriteHandle : The ensemble change has failed due to a metadata error", t);
-        } else if (Futures.unwrap(t) instanceof BkException) {
-            BkException me = (BkException) Futures.unwrap(t);
-            errorOutPendingAdds(me.getCode());
-            logger.logError("LedgerWriteHandle : The ensemble change has failed due to an error.", t);
+    private void ensembleChangeFailed(Throwable t, boolean closeLedger) {
+        t = Futures.unwrap(t);
+        if (t instanceof MetadataException || t instanceof BkException) {
+            String code = t instanceof MetadataException
+                    ? ((MetadataException)t).getCode()
+                    : ((BkException)t).getCode();
+            if (closeLedger) {
+                logger.logError("The ensemble change has failed due to code: " + code
+                        + " Will try to close the ledger", t);
+                closeInternal(code);
+            } else {
+                logger.logError("The ensemble change has failed due to code: " + code
+                        + " Erroring out pending add ops", t);
+                errorOutPendingAdds(code);
+            }
         } else if (Futures.unwrap(t) instanceof OperationCancelledException) {
-            logger.logInfo("LedgerWriteHandle : The ensemble change has been cancelled");
+            logger.logInfo("The ensemble change has been cancelled");
         } else {
-            errorOutPendingAdds(ReturnCodes.UNEXPECTED_ERROR);
-            logger.logError("LedgerWriteHandle : The ensemble change has failed due to an unexpected error", t);
+            if (closeLedger) {
+                logger.logError("The ensemble change has failed due to an unexpected error. " +
+                        " Will try to close the ledger.", t);
+                closeInternal(ReturnCodes.UNEXPECTED_ERROR);
+            } else {
+                logger.logError("The ensemble change has failed due to an unexpected error." +
+                        " Erroring out pending add ops", t);
+                errorOutPendingAdds(ReturnCodes.UNEXPECTED_ERROR);
+            }
         }
     }
 
@@ -374,4 +405,88 @@ public class LedgerWriteHandle {
 
         return t;
     }
+
+//    private void changeEnsembleOld(Map<Integer, String> failedBookies) {
+//        Map<Integer, String> bookiesToReplace = validFailedBookies(failedBookies);
+//        if (bookiesToReplace.isEmpty()) {
+//            logger.logDebug("LedgerWriteHandle : Ignoring bookie write failure for bookie that is no longer a member of the current ensemble");
+//            return;
+//        } else if (lm().getStatus() == LedgerStatus.CLOSED) {
+//            logger.logDebug("LedgerWriteHandle : Ensemble changed cancelled - ledger already closed");
+//            return;
+//        }
+//
+//        logger.logDebug("LedgerWriteHandle : Changing the ensemble due to failure in bookies: " + bookiesToReplace.values());
+//        changingEnsemble = true;
+//
+//        // work on a copy and replace it at the end
+//        Versioned<LedgerMetadata> copyOfMetadata = new Versioned<>(
+//                new LedgerMetadata(lm()), versionedMetadata.getVersion());
+//
+//        ledgerManager.getAvailableBookies()
+//                .thenApply(this::checkForCancellation)
+//                .thenCompose((List<String> availableBookies) -> {
+//                    logger.logDebug("LedgerWriteHandle : Available bookies: " + availableBookies);
+//                    availableBookies.removeAll(copyOfMetadata.getValue().getCurrentEnsemble());
+//                    logger.logDebug("LedgerWriteHandle : Available bookies not in current ensemble: " + availableBookies);
+//                    if (availableBookies.size() < bookiesToReplace.size()) {
+//                        logger.logError("LedgerWriteHandle : Couldn't add a new ensemble, not enough bookies");
+//                        if (lm().getStatus() == LedgerStatus.IN_RECOVERY) {
+//                            // don't close if we're in recovery, else we'd truncate data
+//                            return Futures.failedFuture(new BkException("Not enough bookies to change the ensemble",
+//                                    ReturnCodes.Bookie.NOT_ENOUGH_BOOKIES));
+//                        } else {
+//                            return closeInternal(ReturnCodes.Bookie.NOT_ENOUGH_BOOKIES);
+//                        }
+//                    } else {
+//                        logger.logDebug("LedgerWriteHandle : Enough available bookies");
+//                        Collections.shuffle(availableBookies);
+//                        Set<Integer> replacedBookieIndices = new HashSet<>();
+//
+//                        List<String> newEnsemble = new ArrayList<>(copyOfMetadata.getValue().getCurrentEnsemble());
+//                        int replaceIndex = 0;
+//                        for (int bookieIndex : bookiesToReplace.keySet()) {
+//                            String newBookie = availableBookies.get(replaceIndex);
+//                            newEnsemble.set(bookieIndex, newBookie);
+//                            replacedBookieIndices.add(bookieIndex);
+//                            replaceIndex++;
+//                        }
+//
+//                        if (lastAddConfirmed + 1 == copyOfMetadata.getValue().getEnsembles().lastKey()) {
+//                            logger.logDebug("LedgerWriteHandle : Replacing last ensemble: "
+//                                    + copyOfMetadata.getValue().getCurrentEnsemble()
+//                                    + " with new ensemble: " + newEnsemble);
+//                            copyOfMetadata.getValue().replaceCurrentEnsemble(newEnsemble);
+//                        } else {
+//                            logger.logDebug("LedgerWriteHandle : Appending new ensemble: " + newEnsemble);
+//                            copyOfMetadata.getValue().addEnsemble(lastAddConfirmed + 1, newEnsemble);
+//                        }
+//
+//                        return ledgerManager.updateLedgerMetadata(copyOfMetadata)
+//                                .thenApply(this::checkForCancellation)
+//                                .thenApply((Versioned<LedgerMetadata> vlm) -> {
+//                                    logger.logDebug("LedgerWriteHandle : Metadata updated. Current ensemble: "
+//                                            + vlm.getValue().getCurrentEnsemble()
+//                                            + " From: " + versionedMetadata.getValue().getCurrentEnsemble());
+//                                    versionedMetadata = vlm;
+//                                    unsetSuccessAndSendWriteRequest(newEnsemble, replacedBookieIndices);
+//
+//                                    return versionedMetadata;
+//                                });
+//                    }
+//                })
+//                .whenComplete((Versioned<LedgerMetadata> vlm, Throwable t) -> {
+//                    changingEnsemble = false;
+//
+//                    if (t != null) {
+//                        ensembleChangeFailed(t);
+//                    } else if (!delayedWriteFailedBookies.isEmpty() && delayedWriteFailedBookies.values().stream()
+//                            .anyMatch(x -> vlm.getValue().getCurrentEnsemble().contains(x))) {
+//                        logger.logInfo("LedgerWriteHandle : More failed bookies during last ensemble change. Triggered new ensemble change.");
+//                        changeEnsemble(delayedWriteFailedBookies);
+//                    } else {
+//                        logger.logDebug("LedgerWriteHandle : Ensemble change complete");
+//                    }
+//                });
+//    }
 }

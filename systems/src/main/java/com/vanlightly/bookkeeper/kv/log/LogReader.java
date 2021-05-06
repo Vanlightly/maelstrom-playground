@@ -1,6 +1,5 @@
 package com.vanlightly.bookkeeper.kv.log;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vanlightly.bookkeeper.*;
 import com.vanlightly.bookkeeper.kv.Op;
 import com.vanlightly.bookkeeper.kv.bkclient.*;
@@ -17,6 +16,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.Supplier;
@@ -32,7 +32,7 @@ import java.util.function.Supplier;
     machine housekeeping than the writer.
  */
 public class LogReader extends LogClient {
-    private Logger logger = LogManager.getLogger(this.getClass().getName());
+    private Logger logger = LogManager.getLogger(this.getClass().getSimpleName());
     private LedgerReadHandle readHandle;
     private ReaderSM sm;
     private Supplier<Position> cursorView;
@@ -101,10 +101,10 @@ public class LogReader extends LogClient {
         checkInvariants();
 
         return openNextLedger()
-                || longPoll()
-                || readUpToLac()
-                || reachedEndOfLedger()
                 || updateCachedLedgerMetadata()
+                || longPoll()
+                || readBatch()
+                || reachedEndOfLedger()
                 || isInIllegalState();
     }
 
@@ -267,6 +267,7 @@ public class LogReader extends LogClient {
     }
 
     private void updateCurrentLedgerMetadata(long ledgerId) {
+        logger.logDebug("Updating ledger metadata for ledger: " + ledgerId);
         ledgerManager.getLedgerMetadata(ledgerId)
                 .thenApply(this::checkForCancellation)
                 .thenAccept((Versioned<LedgerMetadata> vlm) -> {
@@ -279,6 +280,7 @@ public class LogReader extends LogClient {
                         if (vlm.getValue().getLedgerId() == cachedMd.getLedgerId()) {
                             // we only care about ledger metadata changes that pertain to the current ledger being read
                             if (vlm.getVersion() > cachedMdVersion) {
+                                logger.logDebug("New ledger metadata: " + vlm.getValue());
                                 // we only care about changes that have happened after our cached version
                                 readHandle.setCachedLedgerMetadata(vlm);
 
@@ -361,79 +363,136 @@ public class LogReader extends LogClient {
         }
     }
 
-    private boolean readUpToLac() {
+//    private boolean readUpToLac() {
+//        if (sm.state == State.IDLE
+//                && ((!ledgerIsClosed() && cursorView.get().getEntryId() < readHandle.getLastAddConfirmed())
+//                    || (ledgerIsClosed() && cursorView.get().getEntryId() < lm().getLastEntryId()))) {
+//            Position lastPositionRead = cursorView.get();
+//            final int stateCtr = sm.changeState(State.READING);
+//
+//            readNext(lastPositionRead, stateCtr)
+//                    .thenApply(this::checkForCancellation)
+//                    .thenAccept((Position finalPositionRead) -> {
+//                        if (!sm.isInState(stateCtr)) {
+//                            logger.logDebug("Ignoring stale read result");
+//                            return;
+//                        }
+//
+//                        logger.logDebug("Read position=" + finalPositionRead);
+//                        if (finalPositionRead.isEndOfLedger()) {
+//                            sm.changeState(State.NO_LEDGER);
+//                        } else {
+//                            sm.changeState(State.IDLE);
+//                        }
+//                    })
+//                    .whenComplete((Void v, Throwable t) -> {
+//                        if (isError(t)){
+//                            logger.logError("Failed reading ledger", t);
+//                            sm.changeState(State.IDLE);
+//                        }
+//                    });
+//            return true;
+//        } else {
+//            return false;
+//        }
+//    }
+//
+//    private CompletableFuture<Position> readNext(Position prev, final int stateCtr) {
+//        if (!sm.isInState(stateCtr)) {
+//            logger.logDebug("Ignoring read request due to state change");
+//            return CompletableFuture.completedFuture(prev);
+//        } else if (ledgerIsClosed() && prev.getEntryId() == lm().getLastEntryId()) {
+//            logger.logDebug("Reached end of closed ledger: " + lm().getLedgerId());
+//            prev.setEndOfLedger(true);
+//            return CompletableFuture.completedFuture(prev);
+//        } else if (!ledgerIsClosed() && prev.getEntryId() == readHandle.getLastAddConfirmed()) {
+//            logger.logDebug("Reached LAC of open ledger: " + lm().getLedgerId());
+//            // we can't safely read any further
+//            return CompletableFuture.completedFuture(prev);
+//        }
+//
+//        return readHandle.read(prev.getEntryId() + 1)
+//                .thenApply(this::checkForCancellation)
+//                .thenCompose((Result<Entry> result) -> {
+//                    if (!sm.isInState(stateCtr)) {
+//                        logger.logDebug("Ignoring read result due to state change");
+//                        return CompletableFuture.completedFuture(prev);
+//                    } else if (result.getCode().equals(ReturnCodes.OK)) {
+//                        if (result.getData().getValue().equals("")) {
+//                            logger.logError("Entry read has no value: " + result.getData());
+//                        }
+//
+//                        logger.logDebug("Read entry success: " + result.getData());
+//                        Position pos = updateCursor(result.getData());
+//                        return readNext(pos, stateCtr);
+//                    } else if (result.getCode().equals(ReturnCodes.Bookie.NO_SUCH_ENTRY)
+//                            || result.getCode().equals(ReturnCodes.Bookie.NO_SUCH_LEDGER)) {
+//                        logger.logError("Entry may be lost. Have not reached LAC but all bookies report negatively.");
+//                        // we don't advance
+//                        return CompletableFuture.completedFuture(prev);
+//                    } else {
+//                        logger.logDebug("Read inconclusive. Bookies may be unavailable.");
+//                        // we don't advance
+//                        return CompletableFuture.completedFuture(prev);
+//                    }
+//                });
+//    }
+
+    private boolean readBatch() {
         if (sm.state == State.IDLE
                 && ((!ledgerIsClosed() && cursorView.get().getEntryId() < readHandle.getLastAddConfirmed())
-                    || (ledgerIsClosed() && cursorView.get().getEntryId() < lm().getLastEntryId()))) {
+                || (ledgerIsClosed() && cursorView.get().getEntryId() < lm().getLastEntryId()))) {
             Position lastPositionRead = cursorView.get();
             final int stateCtr = sm.changeState(State.READING);
 
-            readNext(lastPositionRead, stateCtr)
-                    .thenApply(this::checkForCancellation)
-                    .thenAccept((Position finalPositionRead) -> {
-                        if (!sm.isInState(stateCtr)) {
-                            logger.logDebug("Ignoring stale read result");
-                            return;
-                        }
+            long firstEntryId = lastPositionRead.getEntryId() + 1;
+            long maxEntryId = ledgerIsClosed()
+                    ? Math.min(lastPositionRead.getEntryId() + 20, lm().getLastEntryId())
+                    : Math.min(lastPositionRead.getEntryId() + 20, readHandle.getLastAddConfirmed());
 
-                        logger.logDebug("Read position=" + finalPositionRead);
-                        if (finalPositionRead.isEndOfLedger()) {
-                            sm.changeState(State.NO_LEDGER);
-                        } else {
-                            sm.changeState(State.IDLE);
-                        }
-                    })
-                    .whenComplete((Void v, Throwable t) -> {
-                        if (isError(t)){
-                            logger.logError("Failed reading ledger", t);
-                            sm.changeState(State.IDLE);
-                        }
-                    });
+
+            logger.logDebug("Sending batch reads of entries " + firstEntryId
+                    + " to " + maxEntryId);
+            AtomicBoolean skip = new AtomicBoolean(false);
+            for (long e = firstEntryId; e <= maxEntryId; e++) {
+                readHandle.read(e)
+                        .thenAccept((Result<Entry> result) -> {
+                            if (sm.isInState(stateCtr)) {
+                                // once we have received a non-success response, we skip the rest of the
+                                // batch read results, else gaps could occur
+                                if (!skip.get()) {
+                                    if (result.getCode().equals(ReturnCodes.OK)) {
+                                        if (result.getData().getValue().equals("")) {
+                                            logger.logError("Entry read has no value: " + result.getData());
+                                        }
+
+                                        logger.logDebug("Read entry success: " + result.getData());
+                                        updateCursor(result.getData());
+                                    } else if (result.getCode().equals(ReturnCodes.Bookie.NO_SUCH_ENTRY)
+                                            || result.getCode().equals(ReturnCodes.Bookie.NO_SUCH_LEDGER)) {
+                                        logger.logInvariantViolation("Entry is lost. Have not reached LAC " +
+                                                "but all bookies report negatively.", Invariants.LOST_ENTRY);
+                                        skip.set(true); // no reads after this in this batch are valid
+                                    } else {
+                                        logger.logDebug("Read inconclusive. Bookies may be unavailable.");
+                                        skip.set(true); // no reads after this in this batch are valid
+                                    }
+                                }
+
+                                // if this is the last result of the batch, switch back to the idle state ready
+                                // for another batch read or long poll
+                                if (result.getData().getEntryId() == maxEntryId) {
+                                    logger.logDebug("Read batch complete of entries " + firstEntryId
+                                                                        + " to " + maxEntryId);
+                                    sm.changeState(State.IDLE);
+                                }
+                            }
+                        });
+            }
             return true;
         } else {
             return false;
         }
-    }
-
-    private CompletableFuture<Position> readNext(Position prev, final int stateCtr) {
-        if (!sm.isInState(stateCtr)) {
-            logger.logDebug("Ignoring read request due to state change");
-            return CompletableFuture.completedFuture(prev);
-        } else if (ledgerIsClosed() && prev.getEntryId() == lm().getLastEntryId()) {
-            logger.logDebug("Reached end of closed ledger: " + lm().getLedgerId());
-            prev.setEndOfLedger(true);
-            return CompletableFuture.completedFuture(prev);
-        } else if (!ledgerIsClosed() && prev.getEntryId() == readHandle.getLastAddConfirmed()) {
-            logger.logDebug("Reached LAC of open ledger: " + lm().getLedgerId());
-            // we can't safely read any further
-            return CompletableFuture.completedFuture(prev);
-        }
-
-        return readHandle.read(prev.getEntryId() + 1)
-                .thenApply(this::checkForCancellation)
-                .thenCompose((Result<Entry> result) -> {
-                    if (!sm.isInState(stateCtr)) {
-                        logger.logDebug("Ignoring read result due to state change");
-                        return CompletableFuture.completedFuture(prev);
-                    } else if (result.getCode().equals(ReturnCodes.OK)) {
-                        if (result.getData().getValue().equals("")) {
-                            logger.logError("Entry read has no value: " + result.getData());
-                        }
-
-                        logger.logDebug("Read entry success: " + result.getData());
-                        Position pos = updateCursor(result.getData());
-                        return readNext(pos, stateCtr);
-                    } else if (result.getCode().equals(ReturnCodes.Bookie.NO_SUCH_ENTRY)
-                            || result.getCode().equals(ReturnCodes.Bookie.NO_SUCH_LEDGER)) {
-                        logger.logError("Entry may be lost. Have not reached LAC but all bookies report negatively.");
-                        // we don't advance
-                        return CompletableFuture.completedFuture(prev);
-                    } else {
-                        logger.logDebug("Read inconclusive. Bookies may be unavailable.");
-                        // we don't advance
-                        return CompletableFuture.completedFuture(prev);
-                    }
-                });
     }
 
     private boolean isInIllegalState() {

@@ -21,13 +21,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public abstract class Node implements MessageSender {
     public final static String MetadataNodeId = "n0";
 
-    protected Logger logger = LogManager.getLogger(this.getClass().getName());
+    protected Logger logger = LogManager.getLogger(this.getClass().getSimpleName());
     protected ObjectMapper mapper = MsgMapping.getMapper();
 
     protected NetworkIO net;
     protected SessionManager sessionManager;
     protected ManagerBuilder builder;
     protected String nodeId;
+    private NodeType nodeType;
     protected int nextMsgId;
     protected AtomicBoolean isCancelled;
 
@@ -35,11 +36,16 @@ public abstract class Node implements MessageSender {
     private DeadlineCollection<JsonNode> replyDeadlines;
     private DeadlineCollection<CompletableFuture<Void>> delayedFutures;
 
+    private int sessionKaLimit;
+    private int sessionKeepAliveCtr;
+
     public Node(String nodeId,
+                NodeType nodeType,
                 boolean includeSessionManagement,
                 NetworkIO net,
                 ManagerBuilder builder) {
         this.nodeId = nodeId;
+        this.nodeType = nodeType;
         this.net = net;
         this.isCancelled = new AtomicBoolean();
         this.builder = builder;
@@ -57,6 +63,15 @@ public abstract class Node implements MessageSender {
 
         // set up the delay handling to use the scheduled delays of the node
         Futures.Delay = (delayMs) -> delay(delayMs);
+
+        // lose keep alives - configurable - used for causing ledger recovery which is the most complex
+        // part of the protocol and most likely to contain errors
+        if (Constants.KeepAlives.LoseKeepAlivesAfterMs > 0) {
+            this.sessionKaLimit = (int) (Constants.KeepAlives.LoseKeepAlivesAfterMs / Constants.KeepAlives.KeepAliveIntervalMs);
+        } else {
+            this.sessionKaLimit = 0;
+        }
+        this.sessionKeepAliveCtr = 0;
     }
 
     public static NodeType determineType(String nodeId) {
@@ -107,6 +122,10 @@ public abstract class Node implements MessageSender {
     }
 
     public CompletableFuture<Void> delay(int delayMs) {
+        if (delayMs == 0) {
+            return CompletableFuture.completedFuture(null);
+        }
+
         CompletableFuture<Void> future = new CompletableFuture<>();
         delayedFutures.add(System.currentTimeMillis() + delayMs, future);
         return future;
@@ -172,6 +191,21 @@ public abstract class Node implements MessageSender {
         if (replyFuture != null) {
             replyCallbacks.put(nextMsgId, replyFuture);
             replyDeadlines.add(System.currentTimeMillis() + timeoutMs, msg);
+        }
+
+        // if losing keep alives is configured, stop sending them once the limit has been reached
+        // until a new session is established
+        if (sessionKaLimit > 0 && nodeType == NodeType.KvStore) {
+            if (command.equals(Commands.Metadata.SESSION_KEEP_ALIVE)) {
+                if (sessionKeepAliveCtr >= sessionKaLimit) {
+                    logger.logDebug("Losing keep alive");
+                    return;
+                }
+                sessionKeepAliveCtr++;
+            } else if (command.equals(Commands.Metadata.SESSION_NEW)) {
+                logger.logDebug("Reset keep alive ctr");
+                sessionKeepAliveCtr = 0;
+            }
         }
 
         net.write(msg.toString());

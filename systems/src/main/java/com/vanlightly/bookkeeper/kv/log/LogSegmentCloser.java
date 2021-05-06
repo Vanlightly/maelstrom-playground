@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 public class LogSegmentCloser extends LogClient {
-    private Logger logger = LogManager.getLogger(this.getClass().getName());
+    private Logger logger = LogManager.getLogger(this.getClass().getSimpleName());
     private LedgerReadHandle readHandle;
     private LedgerWriteHandle writeHandle;
     private RecoveryOp recoveryOp;
