@@ -88,13 +88,11 @@ public class LedgerReadHandle {
         CompletableFuture<Result<Entry>> future = new CompletableFuture<>();
 
         PendingRead pendingRead = new PendingRead(entryId,
-                this,
                 future,
                 lm().getWriteQuorum(),
                 1,
                 lm().getWriteQuorum(),
-                lm().getWriteQuorum(),
-                false);
+                lm().getWriteQuorum());
 
         pendingReads.add(pendingRead);
         // TODO: implement sticky bookie reads optimization
@@ -130,7 +128,7 @@ public class LedgerReadHandle {
                     }
                 }
 
-                completePipelinedReadFutures();
+                completeReadFutures();
             })
             .whenComplete((Void v, Throwable t) -> {
                 if (isError(t)) {
@@ -140,45 +138,23 @@ public class LedgerReadHandle {
             });
     }
 
-    private void completePipelinedReadFutures() {
-        PendingRead pendingRead;
-
-        while ((pendingRead = pendingReads.peek()) != null) {
-            if (pendingRead.isPositive() || pendingRead.noPendingResponses()) {
-                if (pendingRead.isPositive()) {
-                    updateLac(pendingRead.getEntry().getLac());
-                    pendingRead.getFuture().complete(new Result<>(ReturnCodes.OK, pendingRead.getEntry()));
-                } else if (pendingRead.isNegative()) {
-                    pendingRead.getFuture().complete(new Result<>(ReturnCodes.Bookie.NO_SUCH_ENTRY,
-                            new Entry(getLedgerId(), pendingRead.getEntryId(), null)));
-                } else {
-                    pendingRead.getFuture().complete(new Result<>(ReturnCodes.Ledger.UNKNOWN,
-                            new Entry(getLedgerId(), pendingRead.getEntryId(), null)));
-                }
-
-                // remove the head of the queue
-                pendingReads.poll();
-            } else {
-                break;
-            }
-        }
-    }
-
     public CompletableFuture<Result<Entry>> recoveryRead(long entryId) {
         CompletableFuture<Result<Entry>> future = new CompletableFuture<>();
 
         // a recovery read only needs an AQ to succeed, but a negative
         // requires QC as this then precludes the possibility of a success
         logger.logDebug("Sending recovery read requests to: " + lm().getEnsembleFor(entryId));
-        PendingRead recoveryReadPendingRead = new PendingRead(entryId,
-                this,
+        PendingRead recoveryPendingRead = new PendingRead(entryId,
                 future,
                 lm().getWriteQuorum(),
                 lm().getAckQuorum(),  // positive threshold
                 quorumCoverage(lm()), // negative threshold
-                quorumCoverage(lm()), // unknown threshold
-                true);
-        parallelRead(entryId, Commands.Bookie.READ_ENTRY, false, recoveryReadPendingRead);
+                quorumCoverage(lm())); // unknown threshold
+        pendingReads.add(recoveryPendingRead);
+
+        parallelRead(entryId, Commands.Bookie.READ_ENTRY,
+                Config.RecoveryReadsFence,
+                recoveryPendingRead);
 
         return future;
     }
@@ -190,13 +166,14 @@ public class LedgerReadHandle {
         // for fencing LAC to be complete we must ensure that no AQ of bookies
         // remains unfenced, hence the QC threshold for positive and AQ for unknown
         PendingRead fencingPendingRead = new PendingRead(-1L,
-                this,
                 future,
                 lm().getWriteQuorum(),
                 quorumCoverage(lm()),  // positive threshold
                 lm().getWriteQuorum(), // negative threshold (not possible with fencing LAC read)
-                lm().getAckQuorum(),   // unknown threshold
-                true);
+                lm().getAckQuorum());   // unknown threshold
+
+        pendingReads.add(fencingPendingRead);
+
         parallelRead(-1L, Commands.Bookie.READ_LAC, true, fencingPendingRead);
 
         return future;
@@ -204,12 +181,14 @@ public class LedgerReadHandle {
 
     public CompletableFuture<Result<Entry>> lacLongPollRead() {
         CompletableFuture<Result<Entry>> future = new CompletableFuture<Result<Entry>>();
-        PendingRead lpPendingRead = new LongPollPendingRead(this,
+        PendingRead lpPendingRead = new LongPollPendingRead(
                 future,
                 lm().getWriteQuorum(),
                 quorumCoverage(lm()),
                 quorumCoverage(lm()),
                 lastAddConfirmed);
+        pendingReads.add(lpPendingRead);
+
         parallelRead(lastAddConfirmed, Commands.Bookie.READ_LAC_LONG_POLL,
                 false, lpPendingRead);
 
@@ -248,13 +227,16 @@ public class LedgerReadHandle {
             int i = b;
             if (readCommand.equals(Commands.Bookie.READ_LAC)
                     && fence
-                    && b == writeQuorum - 1) {
+                    && b == writeQuorum - 1
+                    && Config.LoseFencingMsg) {
                 // TODO: REMOVE => lose a single fencing LAC read
                 i = 0;
             }
 
             // TODO: REMOVE => use delays to increase probability of read/write overlap
-            int delay = (readCommand.equals(Commands.Bookie.READ_ENTRY) ? 100 : 0) * i;
+            int delay = (readCommand.equals(Commands.Bookie.READ_ENTRY)
+                    ? Config.AddReadSpreadMs
+                    : 0) * i;
 
             int finalI = i;
             int finalMsgTimeout = msgTimeout;
@@ -264,33 +246,47 @@ public class LedgerReadHandle {
                 messageSender.sendRequest(bookieId, readCommand, readReq, finalMsgTimeout)
                         .thenApply(this::checkForCancellation)
                         .thenAccept((JsonNode reply) -> {
-                            if (pendingRead.getFuture().isDone()) {
-                                // seen enough responses already
-                                return;
-                            }
-
                             JsonNode body = reply.get(Fields.BODY);
                             String rc = body.get(Fields.RC).asText();
                             pendingRead.register(rc, body);
 
-                            if (pendingRead.isPositive()) {
-                                pendingRead.getFuture().complete(new Result<>(ReturnCodes.OK, pendingRead.getEntry()));
-                            } else if (pendingRead.isNegative()) {
-                                logger.logDebug("LedgerHandle: Parallel read is negative for entry: " + entryId + " with negatives=" + pendingRead.negatives);
-                                pendingRead.getFuture().complete(new Result<>(ReturnCodes.Ledger.NO_QUORUM, null));
-                            } else if (pendingRead.isUnknown()) {
-                                pendingRead.getFuture().complete(new Result<>(ReturnCodes.Ledger.UNKNOWN, null));
-                            }
+                            completeReadFutures();
                         })
                         .whenComplete((Void v, Throwable t) -> {
                             if (t != null) {
-                                logger.logError("LedgerHandle: Failed performing parallel read", t);
+                                if (isError(t)) {
+                                    // if it was cancelled, don't log it
+                                    logger.logError("LedgerHandle: Failed performing parallel read", t);
+                                }
                                 if (!pendingRead.getFuture().isDone()) {
                                     pendingRead.getFuture().completeExceptionally(Futures.unwrap(t));
                                 }
                             }
                         });
             });
+        }
+    }
+
+    private void completeReadFutures() {
+        PendingRead pendingRead;
+
+        while ((pendingRead = pendingReads.peek()) != null) {
+            if (pendingRead.isPositive()) {
+                updateLac(pendingRead.getEntry().getLac());
+                pendingRead.getFuture().complete(new Result<>(ReturnCodes.OK, pendingRead.getEntry()));
+                pendingReads.poll();
+            } else if (pendingRead.isNegative()) {
+                logger.logDebug("LedgerHandle: Parallel read is negative for entry: " + pendingRead.getEntryId()
+                        + " with negatives=" + pendingRead.negatives);
+                pendingRead.getFuture().complete(new Result<>(ReturnCodes.Ledger.NO_QUORUM, null));
+                pendingReads.poll();
+            } else if (pendingRead.isUnknown() || pendingRead.noPendingResponses()) {
+                pendingRead.getFuture().complete(new Result<>(ReturnCodes.Ledger.UNKNOWN, null));
+                pendingReads.poll();
+            } else {
+                // not enough responses yet
+                break;
+            }
         }
     }
 
@@ -329,41 +325,28 @@ public class LedgerReadHandle {
         Entry intermediateEntry;
 
         long entryId;
-        LedgerReadHandle lh;
         CompletableFuture<Result<Entry>> future;
         int writeQuorum;
         int positiveThreshold;
         int negativeThreshold;
         int unknownThreshold;
-        boolean updateLac;
 
         public PendingRead(long entryId,
-                           LedgerReadHandle lh,
                            CompletableFuture<Result<Entry>> future,
                            int writeQuorum,
                            int positiveThreshold,
                            int negativeThreshold,
-                           int unknownThreshold,
-                           boolean updateLac) {
+                           int unknownThreshold) {
             this.entryId = entryId;
-            this.lh = lh;
             this.future = future;
             this.writeQuorum = writeQuorum;
             this.positiveThreshold = positiveThreshold;
             this.negativeThreshold = negativeThreshold;
             this.unknownThreshold = unknownThreshold;
-            this.updateLac = updateLac;
         }
 
         public void register(String rc, JsonNode body) {
             if (rc.equals(ReturnCodes.OK)) {
-                // when reads are pipelined, we disable the updating of the LAC
-                // as reads can be received out-of-order, else we allow it to be updated here
-                if (updateLac) {
-                    long lac = body.get(Fields.L.LAC).asLong();
-                    lh.updateLac(lac);
-                }
-
                 Entry entryRead = new Entry(
                         body.get(Fields.L.LEDGER_ID).asLong(),
                         body.get(Fields.L.ENTRY_ID).asLong(),
@@ -424,23 +407,23 @@ public class LedgerReadHandle {
     private static class LongPollPendingRead extends PendingRead {
         long previousLac;
 
-        public LongPollPendingRead(LedgerReadHandle lh,
-                                   CompletableFuture<Result<Entry>> future,
+        public LongPollPendingRead(CompletableFuture<Result<Entry>> future,
                                    int writeQuorum,
                                    int negativeThreshold,
                                    int unknownThreshold,
                                    long previousLac) {
-            super(-1L, lh, future, writeQuorum, Integer.MAX_VALUE,
-                    negativeThreshold, unknownThreshold, true);
+            super(-1L, future, writeQuorum, Integer.MAX_VALUE,
+                    negativeThreshold, unknownThreshold);
             this.previousLac = previousLac;
         }
 
         @Override
         public boolean isPositive() {
-            return (lh.getLastAddConfirmed() > previousLac)
-                    || (noPendingResponses()
-                    && unknowns < unknownThreshold
-                    && negatives < negativeThreshold);
+            return intermediateEntry != null
+                    && (intermediateEntry.getEntryId() > previousLac
+                        || (noPendingResponses()
+                            && unknowns < unknownThreshold
+                            && negatives < negativeThreshold));
         }
     }
 }

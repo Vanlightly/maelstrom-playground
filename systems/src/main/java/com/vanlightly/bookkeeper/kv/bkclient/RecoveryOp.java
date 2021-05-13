@@ -8,6 +8,8 @@ import com.vanlightly.bookkeeper.util.Futures;
 import com.vanlightly.bookkeeper.util.LogManager;
 import com.vanlightly.bookkeeper.util.Logger;
 
+import java.util.ArrayDeque;
+import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -20,6 +22,7 @@ public class RecoveryOp {
     private boolean readsComplete;
     private CompletableFuture<Position> callerFuture;
     private AtomicBoolean isCancelled;
+    Queue<Result<Entry>> pendingRecoveryReads;
 
     public RecoveryOp(LedgerReadHandle lrh,
                       LedgerWriteHandle lwh,
@@ -32,6 +35,7 @@ public class RecoveryOp {
         this.readCount = 0;
         this.writeCount = 0;
         this.readsComplete = false;
+        this.pendingRecoveryReads = new ArrayDeque<>();
     }
 
     public void begin() {
@@ -61,7 +65,7 @@ public class RecoveryOp {
                         writeHandle.setLastAddConfirmed(lac);
                         writeHandle.setLastAddPushed(lac);
                         logger.logDebug("Starting recovery with LAC " + lac);
-                        return readNext(new Position(readHandle.getLedgerId(), lac));
+                        return readUntilEnd(new Position(readHandle.getLedgerId(), lac));
                     } else {
                         return Futures.failedFuture(new BkException("Couldn't fence enough bookies to progress", lacResult.getCode()));
                     }
@@ -86,14 +90,30 @@ public class RecoveryOp {
                 });
     }
 
-    private CompletableFuture<Position> readNext(Position prev) {
-        logger.logDebug("Last read: " + prev);
-        return readHandle.recoveryRead(prev.getEntryId() + 1)
-                .thenCompose((Result<Entry> result) -> {
-                    if (isCancelled.get()) {
-                        completeExceptionally(new OperationCancelledException());
-                        throw new OperationCancelledException();
-                    } else {
+    private CompletableFuture<Position> readUntilEnd(Position prev) {
+        CompletableFuture<Position> future = new CompletableFuture<>();
+        recoveryReadBatch(prev, future);
+        return future;
+    }
+
+    private void recoveryReadBatch(Position prev, CompletableFuture<Position> future) {
+        long fromEntryId = prev.getEntryId() + 1;
+        long toEntryId = fromEntryId + 10;
+        logger.logDebug("Sending recovery reads for range " + fromEntryId + "-" + toEntryId);
+        AtomicBoolean readsAborted = new AtomicBoolean(false);
+
+        // the read handle guarantees that results are ordered, so a simple loop is fine
+        for (long e=fromEntryId; e<=toEntryId; e++) {
+
+            long entryId = e;
+            readHandle.recoveryRead(e)
+                    .thenApply(this::checkForCancellation)
+                    .thenAccept((Result<Entry> result) -> {
+                        if (readsAborted.get()) {
+                            // a prior read already came back negative, so skip all further read results
+                            return;
+                        }
+
                         if (result.getCode().equals(ReturnCodes.OK)) {
                             readCount++;
 
@@ -112,13 +132,12 @@ public class RecoveryOp {
                                                 readHandle.cancel();
                                                 writeHandle.cancel();
                                                 completeExceptionally(t2);
-                                                return;
                                             } else {
                                                 // the write completed successfully, if this was the last
                                                 // write then close the ledger
                                                 writeCount++;
 
-                                                logger.logDebug("Write " + readCount + " successful " + result.getData());
+                                                logger.logDebug("Write " + writeCount + " successful " + result.getData());
 
                                                 if (readsComplete && readCount == writeCount) {
                                                     logger.logDebug("Writes complete");
@@ -128,26 +147,42 @@ public class RecoveryOp {
                                         }
                                     });
 
-                            // read the next entry
-                            Position currPos = new Position(result.getData().getLedgerId(),
-                                    result.getData().getEntryId());
-                            return readNext(currPos);
+                            // continue reading if this batch has been read successfully
+                            if (result.getData().getEntryId() == toEntryId) {
+                                Position currPos = new Position(result.getData().getLedgerId(),
+                                        result.getData().getEntryId());
+                                recoveryReadBatch(currPos, future);
+                            }
                         } else if (result.getCode().equals(ReturnCodes.Ledger.NO_QUORUM)) {
-                            logger.logDebug("Read " + readCount
-                                    + " negative. Last committed entry is: " + prev);
+                            Position lastGoodPos = new Position(readHandle.getLedgerId(), entryId - 1);
+                            logger.logDebug("Read negative. Last committed entry is: " + lastGoodPos);
                             // the previous read was the last good entry
-                            return CompletableFuture.completedFuture(prev);
+                            future.complete(lastGoodPos);
+                            readHandle.cancel();
+                            readsAborted.set(true);
                         } else {
                             // we don't know if the current entry exists or not so we cannot make progress
                             // safely. Cancel and return "too many unknown" code.
-                            logger.logDebug("Read " + readCount + " unknown, cannot make progress. "
-                                    + "Last successful entry is: " + prev);
+                            logger.logDebug("Read unknown, cannot make progress. "
+                                    + "Last successful entry is: " + (entryId - 1));
                             readHandle.cancel();
                             writeHandle.cancel();
-                            throw new BkException("Too many unknown responses", ReturnCodes.Ledger.UNKNOWN);
+                            readsAborted.set(true);
+                            future.completeExceptionally(new BkException("Too many unknown responses",
+                                    ReturnCodes.Ledger.UNKNOWN));
                         }
-                    }
-                });
+                    })
+                    .whenComplete((Void v, Throwable t) -> {
+                        if (isError(t)) {
+                            future.completeExceptionally(t);
+                        }
+                    });
+        }
+    }
+
+    private boolean isError(Throwable t) {
+        return t != null && !(t instanceof OperationCancelledException)
+                && !(Futures.unwrap(t) instanceof OperationCancelledException);
     }
 
     private void closeLedger() {
