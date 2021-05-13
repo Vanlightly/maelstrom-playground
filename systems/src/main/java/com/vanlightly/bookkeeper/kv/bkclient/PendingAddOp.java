@@ -53,7 +53,7 @@ public class PendingAddOp {
         // TODO: REMOVE => use delays to increase probability of read/write overlap
         for (int i=0; i<writeQuorum; i++) {
             int finalI = i;
-            Delay.apply(100*i).thenRun(() -> {
+            Delay.apply(Config.AddReadSpreadMs*i).thenRun(() -> {
                 sendAddEntryRequest(finalI);
             });
         }
@@ -68,7 +68,10 @@ public class PendingAddOp {
         body.put(Fields.L.RECOVERY, isRecoveryAdd);
 
         String bookieId = ensemble.get(bookieIndex);
-        logger.logDebug("Send ADD to bookie: " + bookieId + " index: " + bookieIndex
+        logger.logDebug("Send ADD"
+                + " ledgerId: " + entry.getLedgerId() + " entryId: " + entry.getEntryId()
+                + " lac: " + lh.getLastAddConfirmed()
+                + " to bookie: " + bookieId + " index: " + bookieIndex
                 + " of ensemble: " + ensemble);
         messageSender.sendRequest(bookieId, Commands.Bookie.ADD_ENTRY, body)
                 .thenApply(this::checkForCancellation)

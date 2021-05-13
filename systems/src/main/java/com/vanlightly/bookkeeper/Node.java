@@ -256,7 +256,6 @@ public abstract class Node implements MessageSender {
     }
 
     protected void proxy(JsonNode msg, String dest) {
-//        logger.logDebug("PROXY MSG FORWARD SEND. From: " + nodeId + " to: " + dest);
         ObjectNode msgBody = (ObjectNode)msg.get(Fields.BODY);
         sendRequest(dest,
                 msgBody.get(Fields.MSG_TYPE).asText(),
@@ -269,8 +268,8 @@ public abstract class Node implements MessageSender {
                 if (replyBody.has(Fields.RC)) {
                     // if the response has the RC field then it will be a timeout
                     // or some other such error
-//                    logger.logDebug("PROXY MSG FAILED. From: " + dest + " to: " + origin
-//                            + " rc: " + replyBody.get(Fields.RC).asText());
+                    logger.logDebug("Proxied msg either timed out or failed, sending error response to source. From: " + dest + " to: " + origin
+                            + " rc: " + replyBody.get(Fields.RC).asText());
                     ObjectNode failBody = mapper.createObjectNode();
                     failBody.put(Fields.IN_REPLY_TO, msgBody.get(Fields.MSG_ID).asInt());
                     failBody.put(Fields.KV.Op.TYPE, "error");
@@ -280,7 +279,6 @@ public abstract class Node implements MessageSender {
                             failBody.get(Fields.MSG_TYPE).asText(),
                             failBody);
                 } else {
-//                    logger.logDebug("PROXY MSG FORWARD REPLY. From: " + dest + " to: " + origin);
                     replyBody.put(Fields.IN_REPLY_TO, msgBody.get(Fields.MSG_ID).asInt());
                     send(origin,
                             replyBody.get(Fields.MSG_TYPE).asText(),
