@@ -3,14 +3,19 @@ package com.vanlightly.bookkeeper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.vanlightly.bookkeeper.bookie.BookieNode;
+import com.vanlightly.bookkeeper.kv.KvStoreNode;
+import com.vanlightly.bookkeeper.metadata.MetadataStoreNode;
 import com.vanlightly.bookkeeper.network.NetworkIO;
 import com.vanlightly.bookkeeper.network.StdInOutNetwork;
-import com.vanlightly.bookkeeper.util.Logger;
+import com.vanlightly.bookkeeper.util.StdErrLogger;
 
 public class NodeRunner {
 
     public static void main(String[] args) {
         StdErrLogger.LogLevel = StdErrLogger.DEBUG;
+        Constants.Bookie.BookieCount = 4;
+
         NodeRunner nodeRunner = new NodeRunner();
         nodeRunner.run();
     }
@@ -35,16 +40,19 @@ public class NodeRunner {
         try {
             node = waitForInitMsg();
             System.err.println("Initialization begun");
-
-            while(true) {
-                boolean actionTaken = nextAction();
-                if (!actionTaken) {
-                    Thread.sleep(10);
-                }
-            }
+            eventLoop();
         } catch(Throwable t) {
             System.err.println("Node " + node.nodeId + " exiting due to error:");
             t.printStackTrace(System.err);
+        }
+    }
+
+    private void eventLoop() throws JsonProcessingException, InterruptedException {
+        while(true) {
+            boolean actionTaken = nextAction();
+            if (!actionTaken) {
+                Thread.sleep(10);
+            }
         }
     }
 

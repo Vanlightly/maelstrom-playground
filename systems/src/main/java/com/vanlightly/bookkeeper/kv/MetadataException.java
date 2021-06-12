@@ -1,4 +1,4 @@
-package com.vanlightly.bookkeeper;
+package com.vanlightly.bookkeeper.kv;
 
 public class MetadataException extends RuntimeException {
     String code;

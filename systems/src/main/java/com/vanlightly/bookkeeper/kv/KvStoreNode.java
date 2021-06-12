@@ -1,10 +1,9 @@
-package com.vanlightly.bookkeeper;
+package com.vanlightly.bookkeeper.kv;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.vanlightly.bookkeeper.kv.*;
+import com.vanlightly.bookkeeper.*;
 import com.vanlightly.bookkeeper.kv.bkclient.BkException;
 import com.vanlightly.bookkeeper.kv.log.*;
 import com.vanlightly.bookkeeper.metadata.Versioned;
@@ -92,9 +91,9 @@ public class KvStoreNode extends Node {
         }
 
         // else if we're not in the ready state then no
-        if (!leaderIs(KvStoreState.LeaderState.READY) && !followerIs(KvStoreState.FollowerState.READING)) {
-            return false;
-        }
+//        if (!leaderIs(KvStoreState.LeaderState.READY) && !followerIs(KvStoreState.FollowerState.READING)) {
+//            return false;
+//        }
 
         // else if its been longer than the check interval then yes
         return Duration.between(lastUpdatedMetadata, Instant.now()).toMillis() > Constants.KvStore.CheckLeadershipIntervalMs;
@@ -511,7 +510,7 @@ public class KvStoreNode extends Node {
     }
 
     @Override
-    void handleRequest(JsonNode request) {
+    public void handleRequest(JsonNode request) {
         if (mayBeRedirect(request)) {
             return;
         }
@@ -541,19 +540,19 @@ public class KvStoreNode extends Node {
 
             switch (type) {
                 case Constants.KvStore.Ops.READ:
-                    logger.logDebug("Appended READ to OpLog");
                     opLog.appendUncommitted(opData, appendToMain);
+                    logger.logDebug("Appended READ to OpLog. Data: " + opData);
                     break;
                 case Constants.KvStore.Ops.WRITE:
-                    logger.logDebug("Appended WRITE to OpLog");
                     opData.put(Fields.KV.Op.VALUE, body.get(Fields.KV.Op.VALUE).asText());
                     opLog.appendUncommitted(opData, appendToMain);
+                    logger.logDebug("Appended WRITE to OpLog. Data: " + opData);
                     break;
                 case Constants.KvStore.Ops.CAS:
-                    logger.logDebug("Appended CAS to OpLog");
                     opData.put(Fields.KV.Op.FROM, body.get(Fields.KV.Op.FROM).asText());
                     opData.put(Fields.KV.Op.TO, body.get(Fields.KV.Op.TO).asText());
                     opLog.appendUncommitted(opData, appendToMain);
+                    logger.logDebug("Appended CAS to OpLog. Data: " + opData);
                     break;
                 default:
                     logger.logError("Bad message type: " + type);
@@ -561,7 +560,7 @@ public class KvStoreNode extends Node {
         }
     }
 
-    void printState() {
+    public void printState() {
         logger.logInfo("----------------- KV Store Node -------------");
         logger.logInfo("Role: " + state.role + System.lineSeparator()
             + "Leader state: " + state.leaderState + System.lineSeparator()

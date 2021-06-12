@@ -1,6 +1,7 @@
 package com.vanlightly.bookkeeper.kv.bkclient;
 
 import com.vanlightly.bookkeeper.*;
+import com.vanlightly.bookkeeper.kv.MetadataException;
 import com.vanlightly.bookkeeper.metadata.LedgerMetadata;
 import com.vanlightly.bookkeeper.metadata.LedgerStatus;
 import com.vanlightly.bookkeeper.metadata.Versioned;

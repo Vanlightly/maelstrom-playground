@@ -315,8 +315,8 @@ public abstract class Node implements MessageSender {
         reply(initMsg, null, replyBody);
     }
 
-    abstract void initialize(JsonNode initMsg);
-    abstract boolean roleSpecificAction();
-    abstract void handleRequest(JsonNode request);
-    abstract void printState();
+    public abstract void initialize(JsonNode initMsg);
+    public abstract boolean roleSpecificAction();
+    public abstract void handleRequest(JsonNode request);
+    public abstract void printState();
 }

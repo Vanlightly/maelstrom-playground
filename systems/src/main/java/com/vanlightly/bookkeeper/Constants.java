@@ -17,12 +17,12 @@ public class Constants {
 
     public class Timeouts {
         public static final int TimeoutMs = 500;
-        public static final int ProxyTimeoutMs = 5000;
+        public static final int ProxyTimeoutMs = 2000;
     }
 
     public static class Bookie {
-        public static final int CheckExpiredLongPollReadsIntervalMs = 1000;
-        public static final int WriteQuorum = 2;
+        public static final int CheckExpiredLongPollReadsIntervalMs = 2000;
+        public static final int WriteQuorum = 3;
         public static final int AckQuorum = 2;
         public static int BookieCount = 3; // default is 3 but is configurable.
     }

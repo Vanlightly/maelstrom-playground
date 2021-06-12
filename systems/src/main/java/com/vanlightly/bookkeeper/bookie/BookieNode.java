@@ -1,12 +1,9 @@
-package com.vanlightly.bookkeeper;
+package com.vanlightly.bookkeeper.bookie;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.vanlightly.bookkeeper.bookie.Entry;
-import com.vanlightly.bookkeeper.bookie.Ledger;
+import com.vanlightly.bookkeeper.*;
 import com.vanlightly.bookkeeper.network.NetworkIO;
-import com.vanlightly.bookkeeper.util.InvariantViolationException;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -28,25 +25,23 @@ public class BookieNode extends Node {
     }
 
     @Override
-    void initialize(JsonNode initMsg) {
+    public void initialize(JsonNode initMsg) {
         sendInitOk(initMsg);
     }
 
     @Override
-    boolean roleSpecificAction() {
+    public boolean roleSpecificAction() {
         return sessionManager.maintainSession()
                 || expireLongPollLacReads();
     }
 
     @Override
-    void handleRequest(JsonNode request) {
-        //logger.logDebug("Received request: " + request.toString());
+    public void handleRequest(JsonNode request) {
         if (mayBeRedirect(request)) {
             return;
         }
 
         String type = request.get(Fields.BODY).get(Fields.MSG_TYPE).asText();
-
         if (sessionManager.handlesRequest(type)) {
             sessionManager.handleRequest(request);
         } else {
@@ -72,7 +67,7 @@ public class BookieNode extends Node {
         }
     }
 
-    void printState() {
+    public void printState() {
         StringBuilder sb = new StringBuilder();
         sb.append("----------- Bookie State --------------------" + System.lineSeparator());
         sb.append("Ledgers:" + System.lineSeparator() + System.lineSeparator());
